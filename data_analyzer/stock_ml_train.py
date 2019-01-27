@@ -1,5 +1,6 @@
 import math
 
+from argparse import ArgumentParser
 from IPython import display
 from matplotlib import cm
 from matplotlib import gridspec
@@ -9,6 +10,15 @@ import pandas as pd
 from sklearn import metrics
 import tensorflow as tf
 from tensorflow.python.data import Dataset
+
+parser = ArgumentParser()
+parser.add_argument("-m", "--model_type", 
+                    choices=['linear_regressor', 'neural_network'],
+					default='neural_network',
+					nargs='?',
+                    dest="model_to_train",
+                    help="Model type to train")
+args = parser.parse_args()
 
 def preprocess_features(stock_dataframe):
   """Prepares input features from California housing data set.
@@ -38,20 +48,24 @@ def preprocess_targets(stock_dataframe):
   return processed_targets
   
 def train_model(
+    model_type,
     learning_rate,
     steps,
     batch_size,
     training_examples,
     training_targets,
     validation_examples,
-    validation_targets):
+    validation_targets,
+    hidden_units = [],
+    ):
   """Trains a linear regression model of multiple features.
   
   In addition to training, this function also prints training progress information,
   as well as a plot of the training and validation loss over time.
   
   Args:
-    learning_rate: A `float`, the learning rate.
+    model_type: A `String`, the model type to be trained
+	learning_rate: A `float`, the learning rate.
     steps: A non-zero `int`, the total number of training steps. A training step
       consists of a forward and backward pass using a single batch.
     batch_size: A non-zero `int`, the batch size.
@@ -63,6 +77,7 @@ def train_model(
       `stock_dataframe` to use as input features for validation.
     validation_targets: A `DataFrame` containing exactly one column from
       `stock_dataframe` to use as target for validation.
+	hidden_units: A `list` of int values, specifying the number of neurons in each layer.
       
   Returns:
     A `LinearRegressor` object trained on the training data.
@@ -71,13 +86,23 @@ def train_model(
   periods = 10
   steps_per_period = steps / periods
   
-  # Create a linear regressor object.
-  my_optimizer = tf.train.GradientDescentOptimizer(learning_rate=learning_rate)
-  my_optimizer = tf.contrib.estimator.clip_gradients_by_norm(my_optimizer, 5.0)
-  linear_regressor = tf.estimator.LinearRegressor(
-      feature_columns=construct_feature_columns(training_examples),
-      optimizer=my_optimizer
-  )
+  if model_type == "linear_regressor":
+    # Create a linear regressor object.
+    my_optimizer = tf.train.GradientDescentOptimizer(learning_rate=learning_rate)
+    my_optimizer = tf.contrib.estimator.clip_gradients_by_norm(my_optimizer, 5.0)
+    linear_regressor = tf.estimator.LinearRegressor(
+        feature_columns=construct_feature_columns(training_examples),
+        optimizer=my_optimizer
+    )
+  elif model_type == "neural_network":
+    # Create a DNNRegressor object.
+    my_optimizer = tf.train.GradientDescentOptimizer(learning_rate=learning_rate)
+    my_optimizer = tf.contrib.estimator.clip_gradients_by_norm(my_optimizer, 5.0)
+    dnn_regressor = tf.estimator.DNNRegressor(
+        feature_columns=construct_feature_columns(training_examples),
+        hidden_units=hidden_units,
+        optimizer=my_optimizer,
+    )
   
   # Create input functions.
   training_input_fn = lambda: my_input_fn(
@@ -96,24 +121,28 @@ def train_model(
 
   # Train the model, but do so inside a loop so that we can periodically assess
   # loss metrics.
-  print("Training model...")
+  print("Training " + model_type + " model...")
   print("RMSE (on training data):")
   training_rmse = []
   validation_rmse = []
   for period in range (0, periods):
     # Train the model, starting from the prior state.
-    linear_regressor.train(
-        input_fn=training_input_fn,
-        steps=steps_per_period,
-    )
-    # Take a break and compute predictions.
-    training_predictions = linear_regressor.predict(input_fn=predict_training_input_fn)
+    if model_type == "linear_regressor":
+      regressor = linear_regressor.train(
+		  input_fn=training_input_fn,
+		  steps=steps_per_period,
+	  )
+    elif model_type == "neural_network":
+      regressor = dnn_regressor.train(
+          input_fn=training_input_fn,
+          steps=steps_per_period
+      )
+	  
+	# Take a break and compute predictions.
+    training_predictions = regressor.predict(input_fn=predict_training_input_fn)
+    validation_predictions = regressor.predict(input_fn=predict_validation_input_fn)
     training_predictions = np.array([item['predictions'][0] for item in training_predictions])
-    
-    validation_predictions = linear_regressor.predict(input_fn=predict_validation_input_fn)
     validation_predictions = np.array([item['predictions'][0] for item in validation_predictions])
-    
-    
     # Compute training and validation loss.
     training_root_mean_squared_error = math.sqrt(
         metrics.mean_squared_error(training_predictions, training_targets))
@@ -134,8 +163,9 @@ def train_model(
   plt.plot(training_rmse, label="training")
   plt.plot(validation_rmse, label="validation")
   plt.legend()
+  plt.show()
 
-  return linear_regressor
+  return regressor
   
 def construct_feature_columns(input_features):
   """Construct the TensorFlow Feature Columns.
@@ -149,7 +179,7 @@ def construct_feature_columns(input_features):
               for my_feature in input_features])
   
 def my_input_fn(features, targets, batch_size=1, shuffle=True, num_epochs=None):
-    """Trains a linear regression model (!?) of multiple features.
+    """Trains model of multiple features.
   
     Args:
       features: pandas DataFrame of features
@@ -186,20 +216,36 @@ dataDirectory = str("../data_loader/")
 trainDataFile = pd.read_csv(dataDirectory + "train.csv", sep=",")
 training_examples = preprocess_features(trainDataFile)
 training_targets = preprocess_targets(trainDataFile)
+print("Traning data key indicators:")
 display.display(training_examples.describe())
 display.display(training_targets.describe())
 
 validationDataFile = pd.read_csv(dataDirectory + "validation.csv", sep=",")
 validation_examples = preprocess_features(validationDataFile)
 validation_targets = preprocess_targets(validationDataFile)
+print("Vailidation data key indicators:")
 display.display(validation_examples.describe())
 display.display(validation_targets.describe())
 
-linear_regressor = train_model(
-    learning_rate=0.00003,
-    steps=500,
-    batch_size=5,
-    training_examples=training_examples,
-    training_targets=training_targets,
-    validation_examples=validation_examples,
-    validation_targets=validation_targets)
+if args.model_to_train == "linear_regressor":
+  model_regressor = train_model(
+      args.model_to_train,
+      learning_rate=0.00003,
+      steps=500,
+      batch_size=5,
+      training_examples=training_examples,
+      training_targets=training_targets,
+      validation_examples=validation_examples,
+      validation_targets=validation_targets)
+
+elif args.model_to_train == "neural_network":
+  model_regressor = train_model(
+      args.model_to_train,
+      learning_rate=0.01,
+      steps=500,
+      batch_size=5,
+      training_examples=training_examples,
+      training_targets=training_targets,
+      validation_examples=validation_examples,
+      validation_targets=validation_targets,
+	  hidden_units=[5,5])

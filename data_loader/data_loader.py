@@ -10,7 +10,7 @@ parser.add_argument("-sq", "--stockquote", dest="ticker",
 args = parser.parse_args()
 
 ticker = args.ticker
-start_date = datetime.datetime.now() - datetime.timedelta(days=1*365)
+start_date = datetime.datetime.now() - datetime.timedelta(days=1*455)
 end_date = str(date.today())
 
 dataFrame = get_historical_data(ticker, start=start_date, end=end_date, output_format='pandas')

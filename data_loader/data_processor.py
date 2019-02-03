@@ -30,9 +30,14 @@ dataFrame.dropna(axis=0, how='any', thresh=None, subset=None, inplace=True)
 dataFrame.rename(columns={'close': 'stock_value'}, inplace=True)
 dataFrame.drop(['date', 'open', 'high', 'low', 'volume'], axis=1, inplace=True)
 
-# Divide to training and validation data
-trainingDF = dataFrame.head(140)
-validationDF = dataFrame.tail(40)
+# Divide to training, validation and test data
+dataFrameIndexCount = len(dataFrame.index)
+trainingDFBucketLastIndex = (int) (dataFrameIndexCount / 10 * 6)
+validationDFBucketLastIndex = trainingDFBucketLastIndex + int (dataFrameIndexCount / 10 * 2)
+trainingDFBucket = dataFrame.iloc[0:trainingDFBucketLastIndex]
+validationDFBucket = dataFrame.iloc[(trainingDFBucketLastIndex + 1):validationDFBucketLastIndex]
+testDFBucket = dataFrame.iloc[(validationDFBucketLastIndex + 1):(dataFrameIndexCount - 1)]
 
-trainingDF.to_csv("train.csv", index=False)
-validationDF.to_csv("validation.csv", index=False)
+trainingDFBucket.to_csv("train.csv", index=False)
+validationDFBucket.to_csv("validation.csv", index=False)
+testDFBucket.to_csv("test.csv", index=False)

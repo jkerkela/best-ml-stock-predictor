@@ -165,7 +165,7 @@ def train_model(
   plt.legend()
   print("Final RMSE (on training data):   %0.2f" % training_root_mean_squared_error)
   print("Final RMSE (on validation data): %0.2f" % validation_root_mean_squared_error)
-  plt.show()
+  #plt.show()
 
   return regressor
   
@@ -181,33 +181,92 @@ def construct_feature_columns(input_features):
               for my_feature in input_features])
   
 def my_input_fn(features, targets, batch_size=1, shuffle=True, num_epochs=None):
-    """Trains model of multiple features.
+  """Trains model of multiple features.
   
-    Args:
-      features: pandas DataFrame of features
-      targets: pandas DataFrame of targets
-      batch_size: Size of batches to be passed to the model
-      shuffle: True or False. Whether to shuffle the data.
-      num_epochs: Number of epochs for which data should be repeated. None = repeat indefinitely
-    Returns:
-      Tuple of (features, labels) for next data batch
-    """
+  Args:
+    features: pandas DataFrame of features
+    targets: pandas DataFrame of targets
+    batch_size: Size of batches to be passed to the model
+    shuffle: True or False. Whether to shuffle the data.
+    num_epochs: Number of epochs for which data should be repeated. None = repeat indefinitely
+  Returns:
+    Tuple of (features, labels) for next data batch
+  """
     
-    # Convert pandas data into a dict of np arrays.
-    features = {key:np.array(value) for key,value in dict(features).items()}                                           
+  # Convert pandas data into a dict of np arrays.
+  features = {key:np.array(value) for key,value in dict(features).items()}                                           
  
-    # Construct a dataset, and configure batching/repeating.
-    ds = Dataset.from_tensor_slices((features,targets)) # warning: 2GB limit
-    ds = ds.batch(batch_size).repeat(num_epochs)
+  # Construct a dataset, and configure batching/repeating.
+  ds = Dataset.from_tensor_slices((features,targets)) # warning: 2GB limit
+  ds = ds.batch(batch_size).repeat(num_epochs)
     
-    # Shuffle the data, if specified.
-    if shuffle:
-      ds = ds.shuffle(10000)
+  # Shuffle the data, if specified.
+  if shuffle:
+    ds = ds.shuffle(10000)
     
-    # Return the next batch of data.
-    features, labels = ds.make_one_shot_iterator().get_next()
-    return features, labels
+  # Return the next batch of data.
+  features, labels = ds.make_one_shot_iterator().get_next()
+  return features, labels
 
+def train_linear_model():
+  """Trains linear model with multiple features.
+  
+  Returns:
+    A `LinearRegressor` object trained on the training data.
+  """
+	
+  return train_model(
+    args.model_to_train,
+    learning_rate=0.00003,
+    steps=500,
+    batch_size=5,
+    training_examples=training_examples,
+    training_targets=training_targets,
+    validation_examples=validation_examples,
+    validation_targets=validation_targets)
+
+def train_neural_network_model():
+  """Trains linear model with multiple features.
+  
+  Returns:
+    A `DNNRegressor` object trained on the training data.
+  """
+	
+  return train_model(
+    args.model_to_train,
+    learning_rate=0.015,
+    steps=500,
+    batch_size=10,
+    training_examples=training_examples,
+    training_targets=training_targets,
+    validation_examples=validation_examples,
+    validation_targets=validation_targets,
+    hidden_units=[5,5])
+	  
+def test_model_regressor(model_regressor):
+  """Test model regressor againts test data set"""
+  
+  testDataFile = pd.read_csv(dataDirectory + "test.csv", sep=",")
+  test_examples = preprocess_features(testDataFile)
+  test_targets = preprocess_targets(testDataFile)
+  print("Test data key indicators:")
+  display.display(test_examples.describe())
+  display.display(test_targets.describe())
+
+  predict_testing_input_fn = lambda: my_input_fn(
+    test_examples,
+    validation_targets["1_month_future_value"],
+	num_epochs=1,
+    shuffle=False)
+
+  test_predictions = model_regressor.predict(input_fn=predict_testing_input_fn)
+  test_predictions = np.array([item['predictions'][0] for item in test_predictions])
+
+  root_mean_squared_error = math.sqrt(
+    metrics.mean_squared_error(test_predictions, test_targets))
+
+  print("Final RMSE (on test data): %0.2f" % root_mean_squared_error)
+  
 
 tf.logging.set_verbosity(tf.logging.ERROR)
 pd.options.display.max_rows = 10
@@ -229,25 +288,13 @@ print("Validation data key indicators:")
 display.display(validation_examples.describe())
 display.display(validation_targets.describe())
 
+#train model
 if args.model_to_train == "linear_regressor":
-  model_regressor = train_model(
-      args.model_to_train,
-      learning_rate=0.00003,
-      steps=500,
-      batch_size=5,
-      training_examples=training_examples,
-      training_targets=training_targets,
-      validation_examples=validation_examples,
-      validation_targets=validation_targets)
+  model_regressor = train_linear_model()
 
 elif args.model_to_train == "neural_network":
-  model_regressor = train_model(
-      args.model_to_train,
-      learning_rate=0.015,
-      steps=500,
-      batch_size=10,
-      training_examples=training_examples,
-      training_targets=training_targets,
-      validation_examples=validation_examples,
-      validation_targets=validation_targets,
-	  hidden_units=[5,5])
+  model_regressor = train_neural_network_model()
+	  
+#test model	  
+test_model_regressor(model_regressor)
+

@@ -163,6 +163,8 @@ def train_model(
   plt.plot(training_rmse, label="training")
   plt.plot(validation_rmse, label="validation")
   plt.legend()
+  print("Final RMSE (on training data):   %0.2f" % training_root_mean_squared_error)
+  print("Final RMSE (on validation data): %0.2f" % validation_root_mean_squared_error)
   plt.show()
 
   return regressor
@@ -223,7 +225,7 @@ display.display(training_targets.describe())
 validationDataFile = pd.read_csv(dataDirectory + "validation.csv", sep=",")
 validation_examples = preprocess_features(validationDataFile)
 validation_targets = preprocess_targets(validationDataFile)
-print("Vailidation data key indicators:")
+print("Validation data key indicators:")
 display.display(validation_examples.describe())
 display.display(validation_targets.describe())
 
@@ -241,9 +243,9 @@ if args.model_to_train == "linear_regressor":
 elif args.model_to_train == "neural_network":
   model_regressor = train_model(
       args.model_to_train,
-      learning_rate=0.01,
+      learning_rate=0.015,
       steps=500,
-      batch_size=5,
+      batch_size=10,
       training_examples=training_examples,
       training_targets=training_targets,
       validation_examples=validation_examples,

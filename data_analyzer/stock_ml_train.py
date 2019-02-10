@@ -208,8 +208,21 @@ def my_input_fn(features, targets, batch_size=1, shuffle=True, num_epochs=None):
   features, labels = ds.make_one_shot_iterator().get_next()
   return features, labels
 
-def train_linear_model():
+def train_linear_model(training_examples,
+                       training_targets,
+                       validation_examples,
+                       validation_targets):
   """Trains linear model with multiple features.
+  
+  Args:
+  training_examples: A `DataFrame` containing one or more columns from
+      `stock_dataframe` to use as input features for training.
+    training_targets: A `DataFrame` containing exactly one column from
+      `stock_dataframe` to use as target for training.
+    validation_examples: A `DataFrame` containing one or more columns from
+      `stock_dataframe` to use as input features for validation.
+    validation_targets: A `DataFrame` containing exactly one column from
+      `stock_dataframe` to use as target for validation.
   
   Returns:
     A `LinearRegressor` object trained on the training data.
@@ -225,8 +238,21 @@ def train_linear_model():
     validation_examples=validation_examples,
     validation_targets=validation_targets)
 
-def train_neural_network_model():
+def train_neural_network_model(training_examples,
+                       training_targets,
+                       validation_examples,
+                       validation_targets):
   """Trains linear model with multiple features.
+  
+  Args:
+  training_examples: A `DataFrame` containing one or more columns from
+      `stock_dataframe` to use as input features for training.
+    training_targets: A `DataFrame` containing exactly one column from
+      `stock_dataframe` to use as target for training.
+    validation_examples: A `DataFrame` containing one or more columns from
+      `stock_dataframe` to use as input features for validation.
+    validation_targets: A `DataFrame` containing exactly one column from
+      `stock_dataframe` to use as target for validation.
   
   Returns:
     A `DNNRegressor` object trained on the training data.
@@ -234,7 +260,7 @@ def train_neural_network_model():
 	
   return train_model(
     args.model_to_train,
-    learning_rate=0.015,
+    learning_rate=0.001,
     steps=500,
     batch_size=10,
     training_examples=training_examples,
@@ -266,8 +292,28 @@ def test_model_regressor(model_regressor):
     metrics.mean_squared_error(test_predictions, test_targets))
 
   print("Final RMSE (on test data): %0.2f" % root_mean_squared_error)
-  
 
+def predict_with_model(model_regressor):
+  """predict with model"""
+  
+  dataSourceFile = pd.read_csv(dataDirectory + "test.csv", sep=",")
+  #dataSourceFile = pd.read_csv(dataDirectory + "predict_source.csv", sep=",")
+  data_examples = preprocess_features(dataSourceFile)
+
+  predict_testing_input_fn = lambda: my_input_fn(
+    data_examples,
+    validation_targets["1_month_future_value"],
+	num_epochs=1,
+    shuffle=False)
+
+  final_predictions = model_regressor.predict(input_fn=predict_testing_input_fn)
+  #TODO: we are getting NANs here with predict_source.csv, fix
+  print(list(final_predictions))
+  #final_predictions = np.array([item['predictions'][0] for item in final_predictions])
+  #predictionDataFrame = pd.DataFrame(final_predictions)
+  #predictionDataFrame.to_csv('prediction.csv')
+  
+# init environment
 tf.logging.set_verbosity(tf.logging.ERROR)
 pd.options.display.max_rows = 10
 pd.options.display.float_format = '{:.1f}'.format
@@ -290,11 +336,13 @@ display.display(validation_targets.describe())
 
 #train model
 if args.model_to_train == "linear_regressor":
-  model_regressor = train_linear_model()
+  model_regressor = train_linear_model(training_examples, training_targets, validation_examples, validation_targets)
 
 elif args.model_to_train == "neural_network":
-  model_regressor = train_neural_network_model()
+  model_regressor = train_neural_network_model(training_examples, training_targets, validation_examples, validation_targets)
 	  
 #test model	  
 test_model_regressor(model_regressor)
 
+#predict with model
+predict_with_model(model_regressor)

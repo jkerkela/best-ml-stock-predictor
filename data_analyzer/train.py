@@ -92,7 +92,8 @@ def train_model(
     my_optimizer = tf.contrib.estimator.clip_gradients_by_norm(my_optimizer, 5.0)
     linear_regressor = tf.estimator.LinearRegressor(
         feature_columns=construct_feature_columns(training_examples),
-        optimizer=my_optimizer
+        optimizer=my_optimizer,
+		model_dir="./models/LIN_train_model"
     )
   elif model_type == "neural_network":
     # Create a DNNRegressor object.
@@ -102,6 +103,7 @@ def train_model(
         feature_columns=construct_feature_columns(training_examples),
         hidden_units=hidden_units,
         optimizer=my_optimizer,
+		model_dir="./models/NN_train_model"
     )
   
   # Create input functions.
@@ -137,7 +139,7 @@ def train_model(
           input_fn=training_input_fn,
           steps=steps_per_period
       )
-	  
+	
 	# Take a break and compute predictions.
     training_predictions = regressor.predict(input_fn=predict_training_input_fn)
     validation_predictions = regressor.predict(input_fn=predict_validation_input_fn)
@@ -165,7 +167,6 @@ def train_model(
   plt.legend()
   print("Final RMSE (on training data):   %0.2f" % training_root_mean_squared_error)
   print("Final RMSE (on validation data): %0.2f" % validation_root_mean_squared_error)
-  #plt.show()
 
   return regressor
   
@@ -261,57 +262,13 @@ def train_neural_network_model(training_examples,
   return train_model(
     args.model_to_train,
     learning_rate=0.001,
-    steps=500,
+    steps=750,
     batch_size=10,
     training_examples=training_examples,
     training_targets=training_targets,
     validation_examples=validation_examples,
     validation_targets=validation_targets,
     hidden_units=[5,5])
-	  
-def test_model_regressor(model_regressor):
-  """Test model regressor againts test data set"""
-  
-  testDataFile = pd.read_csv(dataDirectory + "test.csv", sep=",")
-  test_examples = preprocess_features(testDataFile)
-  test_targets = preprocess_targets(testDataFile)
-  print("Test data key indicators:")
-  display.display(test_examples.describe())
-  display.display(test_targets.describe())
-
-  predict_testing_input_fn = lambda: my_input_fn(
-    test_examples,
-    validation_targets["1_month_future_value"],
-	num_epochs=1,
-    shuffle=False)
-
-  test_predictions = model_regressor.predict(input_fn=predict_testing_input_fn)
-  test_predictions = np.array([item['predictions'][0] for item in test_predictions])
-
-  root_mean_squared_error = math.sqrt(
-    metrics.mean_squared_error(test_predictions, test_targets))
-
-  print("Final RMSE (on test data): %0.2f" % root_mean_squared_error)
-
-def predict_with_model(model_regressor):
-  """predict with model"""
-  
-  dataSourceFile = pd.read_csv(dataDirectory + "test.csv", sep=",")
-  #dataSourceFile = pd.read_csv(dataDirectory + "predict_source.csv", sep=",")
-  data_examples = preprocess_features(dataSourceFile)
-
-  predict_testing_input_fn = lambda: my_input_fn(
-    data_examples,
-    validation_targets["1_month_future_value"],
-	num_epochs=1,
-    shuffle=False)
-
-  final_predictions = model_regressor.predict(input_fn=predict_testing_input_fn)
-  #TODO: we are getting NANs here with predict_source.csv, fix
-  print(list(final_predictions))
-  #final_predictions = np.array([item['predictions'][0] for item in final_predictions])
-  #predictionDataFrame = pd.DataFrame(final_predictions)
-  #predictionDataFrame.to_csv('prediction.csv')
   
 # init environment
 tf.logging.set_verbosity(tf.logging.ERROR)
@@ -319,30 +276,23 @@ pd.options.display.max_rows = 10
 pd.options.display.float_format = '{:.1f}'.format
 
 # Load data files 
-dataDirectory = str("../data_loader/")
+dataDirectory = str("../data_loader/data/")
 trainDataFile = pd.read_csv(dataDirectory + "train.csv", sep=",")
 training_examples = preprocess_features(trainDataFile)
 training_targets = preprocess_targets(trainDataFile)
 print("Traning data key indicators:")
 display.display(training_examples.describe())
 display.display(training_targets.describe())
-
-validationDataFile = pd.read_csv(dataDirectory + "validation.csv", sep=",")
-validation_examples = preprocess_features(validationDataFile)
-validation_targets = preprocess_targets(validationDataFile)
-print("Validation data key indicators:")
+validation_data = pd.read_csv(dataDirectory + "validation.csv", sep=",")
+validation_examples = preprocess_features(validation_data)
+validation_targets = preprocess_targets(validation_data)
+print("Traning data key indicators:")
 display.display(validation_examples.describe())
 display.display(validation_targets.describe())
 
-#train model
+# Train model
 if args.model_to_train == "linear_regressor":
   model_regressor = train_linear_model(training_examples, training_targets, validation_examples, validation_targets)
 
 elif args.model_to_train == "neural_network":
   model_regressor = train_neural_network_model(training_examples, training_targets, validation_examples, validation_targets)
-	  
-#test model	  
-test_model_regressor(model_regressor)
-
-#predict with model
-predict_with_model(model_regressor)

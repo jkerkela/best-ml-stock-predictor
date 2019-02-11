@@ -37,9 +37,12 @@ validationDFBucketLastIndex = trainingDFBucketLastIndex + int (dataFrameIndexCou
 trainingDFBucket = dataFrame.iloc[0:trainingDFBucketLastIndex]
 validationDFBucket = dataFrame.iloc[(trainingDFBucketLastIndex + 1):validationDFBucketLastIndex]
 testDFBucket = dataFrame.iloc[(validationDFBucketLastIndex + 1):(dataFrameIndexCount - 1)]
+
+# this needs to be done before dropna call
 predictSourceBucket = dataFrame.head(20)
 
-trainingDFBucket.to_csv("train.csv", index=False)
-validationDFBucket.to_csv("validation.csv", index=False)
-testDFBucket.to_csv("test.csv", index=False)
-predictSourceBucket.to_csv("predict_source.csv", index=False)
+dataDirectory = str("./data/")
+trainingDFBucket.to_csv(dataDirectory + "train.csv", index=False)
+validationDFBucket.to_csv(dataDirectory + "validation.csv", index=False)
+testDFBucket.to_csv(dataDirectory + "evaluate.csv", index=False)
+predictSourceBucket.to_csv(dataDirectory + "predict_source.csv", index=False)

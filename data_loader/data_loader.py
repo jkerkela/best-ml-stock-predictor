@@ -14,4 +14,4 @@ start_date = datetime.datetime.now() - datetime.timedelta(days=1*455)
 end_date = str(date.today())
 
 dataFrame = get_historical_data(ticker, start=start_date, end=end_date, output_format='pandas')
-dataFrame.to_csv(ticker + "_stock_data.csv", index_label="date")
+dataFrame.to_csv("./data/" + ticker + "_stock_data.csv", index_label="date")

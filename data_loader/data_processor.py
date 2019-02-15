@@ -1,6 +1,7 @@
 import talib
 import pandas as pd
 from argparse import ArgumentParser
+import os
 
 parser = ArgumentParser()
 parser.add_argument("-s", "--source", dest="source",
@@ -42,6 +43,7 @@ testDFBucket = dataFrame.iloc[(validationDFBucketLastIndex + 1):(dataFrameIndexC
 predictSourceBucket = dataFrame.head(20)
 
 dataDirectory = str("./data/")
+os.makedirs(dataDirectory, exist_ok=True)
 trainingDFBucket.to_csv(dataDirectory + "train.csv", index=False)
 validationDFBucket.to_csv(dataDirectory + "validation.csv", index=False)
 testDFBucket.to_csv(dataDirectory + "evaluate.csv", index=False)

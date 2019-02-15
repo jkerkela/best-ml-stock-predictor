@@ -1,5 +1,4 @@
 import math
-
 from argparse import ArgumentParser
 from IPython import display
 from matplotlib import cm
@@ -93,7 +92,7 @@ def train_model(
     linear_regressor = tf.estimator.LinearRegressor(
         feature_columns=construct_feature_columns(training_examples),
         optimizer=my_optimizer,
-		model_dir="./models/LIN_train_model"
+		model_dir="./models/LIN_train_model_test"
     )
   elif model_type == "neural_network":
     # Create a DNNRegressor object.
@@ -103,7 +102,7 @@ def train_model(
         feature_columns=construct_feature_columns(training_examples),
         hidden_units=hidden_units,
         optimizer=my_optimizer,
-		model_dir="./models/NN_train_model"
+		model_dir="./models/NN_train_model_test"
     )
   
   # Create input functions.
@@ -292,7 +291,7 @@ display.display(validation_targets.describe())
 
 # Train model
 if args.model_to_train == "linear_regressor":
-  model_regressor = train_linear_model(training_examples, training_targets, validation_examples, validation_targets)
+  train_linear_model(training_examples, training_targets, validation_examples, validation_targets)
 
 elif args.model_to_train == "neural_network":
-  model_regressor = train_neural_network_model(training_examples, training_targets, validation_examples, validation_targets)
+  train_neural_network_model(training_examples, training_targets, validation_examples, validation_targets)

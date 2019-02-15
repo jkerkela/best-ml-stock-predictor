@@ -1,3 +1,4 @@
+import math
 from IPython import display
 import numpy as np
 import pandas as pd
@@ -58,12 +59,25 @@ def preprocess_features(stock_dataframe):
      "RSI50"]]
   return processed_features
 
+def preprocess_targets(stock_dataframe):
+  """Prepares target features (i.e., labels) from California housing data set.
+
+  Args:
+    stock_dataframe: A Pandas DataFrame expected to contain data
+      from the stock data set.
+  Returns:
+    A DataFrame that contains the target feature.
+  """
+  processed_targets = stock_dataframe[
+    ["1_month_future_value"]]
+  return processed_targets
+  
 def evaluate_model(model_regressor,
                        evaluation_examples,
 					   evaluation_targets):
   """Evaluate model"""
 
-  evaluate_input_fn = = lambda: my_input_fn(
+  evaluate_input_fn = lambda: my_input_fn(
     evaluation_examples,
     evaluation_targets["1_month_future_value"],
 	num_epochs=1,
@@ -79,7 +93,7 @@ def evaluate_model(model_regressor,
   
 def getRegressor(features,
                  learning_rate,
-                 hidden_units = []):
+                 hidden_units=[]):
   """get regressor model
   
   Args:
@@ -95,6 +109,7 @@ def getRegressor(features,
   my_optimizer = tf.contrib.estimator.clip_gradients_by_norm(my_optimizer, 5.0)
   dnn_regressor = tf.estimator.DNNRegressor(
     feature_columns=construct_feature_columns(features),
+    hidden_units=hidden_units,
     optimizer=my_optimizer,
 	model_dir="./models/NN_train_model"
   )
@@ -105,13 +120,13 @@ evaluation_data_file = pd.read_csv(dataDirectory + "evaluate.csv", sep=",")
 evaluation_examples = preprocess_features(evaluation_data_file)
 evaluation_targets = preprocess_targets(evaluation_data_file)
 print("Evaluate data key indicators:")
-display.display(validation_examples.describe())
-display.display(validation_targets.describe())
+display.display(evaluation_examples.describe())
+display.display(evaluation_targets.describe())
 
 regressor = getRegressor(features=evaluation_examples,
                         learning_rate=0.001,
                         hidden_units=[5,5])
 
 evaluate_model(regressor,
-                   evaluation_examples,
-				   validation_targets["1_month_future_value"],)
+			   evaluation_examples,
+			   evaluation_targets)

@@ -4,6 +4,7 @@ import pandas as pd
 from sklearn import metrics
 import tensorflow as tf
 from tensorflow.python.data import Dataset
+import os
 
 def construct_feature_columns(input_features):
   """Construct the TensorFlow Feature Columns.
@@ -60,6 +61,7 @@ def predict_with_model(model_regressor,
   final_predictions = np.array([item['predictions'][0] for item in final_predictions])
   predictionDataFrame = pd.DataFrame(final_predictions)
   results_dir = str("./results/")
+  os.makedirs(results_dir, exist_ok=True)
   predictionDataFrame.to_csv(results_dir + 'prediction.csv')
   
 def getRegressor(features,

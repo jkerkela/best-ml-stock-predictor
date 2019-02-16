@@ -4,47 +4,45 @@ from argparse import ArgumentParser
 import os
 
 parser = ArgumentParser()
-parser.add_argument("-s", "--source", dest="source",
+parser.add_argument("-s", "--source", dest="source_file",
                     help="source file to process")
 args = parser.parse_args()
 
-dataFrame = pd.read_csv(args.source, sep=",")
+dataframe = pd.read_csv(args.source_file, sep=",")
 
 # Calculate RSI values 
-dataFrame["RSI14"] = talib.RSI(dataFrame["close"], 14)
-dataFrame["RSI50"] = talib.RSI(dataFrame["close"], 50)
+dataframe["RSI14"] = talib.RSI(dataframe["close"], 14)
+dataframe["RSI50"] = talib.RSI(dataframe["close"], 50)
 
 # Divide last month data as predition data
-predictSourceBucket = dataFrame.tail(30)
+predict_source_bucket = dataframe.tail(30)
 
 # calculate 1 week on month future values 
-dataFrameIndexesWithFuture = len(dataFrame.index) - 20
-for index, row in dataFrame.iterrows():
-	if (index < dataFrameIndexesWithFuture):
-		lookWeekAHeadLoc = index + 5
-		dataFrame.loc[index,"1_week_future_value"] = dataFrame.loc[lookWeekAHeadLoc,"close"] 
-		lookMonthAHeadLoc = index + 20
-		dataFrame.loc[index,"1_month_future_value"] = dataFrame.loc[lookMonthAHeadLoc,"close"] 
+dataframe_indexes_with_future = len(dataframe.index) - 20
+for index, row in dataframe.iterrows():
+	if (index < dataframe_indexes_with_future):
+		month_a_head_loc = index + 20
+		dataframe.loc[index,"1_month_future_value"] = dataframe.loc[month_a_head_loc,"close"] 
 
 # Rename and drop not needed columns
-dataFrame.rename(columns={'close': 'stock_value'}, inplace=True)
-dataFrame.drop(['date', 'open', 'high', 'low', 'volume'], axis=1, inplace=True)
+dataframe.rename(columns={'close': 'stock_value'}, inplace=True)
+dataframe.drop(['date', 'open', 'high', 'low', 'volume'], axis=1, inplace=True)
 
 # Drop indexes with empty values	
-dataFrame.dropna(axis=0, how='any', thresh=None, subset=None, inplace=True)
+dataframe.dropna(axis=0, how='any', thresh=None, subset=None, inplace=True)
 
 # Divide to training, validation and test data
-dataFrameIndexCount = len(dataFrame.index)
-trainingDFBucketLastIndex = (int) (dataFrameIndexCount / 10 * 6)
-validationDFBucketLastIndex = trainingDFBucketLastIndex + int (dataFrameIndexCount / 10 * 2)
-trainingDFBucket = dataFrame.iloc[0:trainingDFBucketLastIndex]
-validationDFBucket = dataFrame.iloc[(trainingDFBucketLastIndex + 1):validationDFBucketLastIndex]
-evaluationDFBucket = dataFrame.iloc[(validationDFBucketLastIndex + 1):(dataFrameIndexCount - 1)]
+dataframe_index_count = len(dataframe.index)
+training_DF_bucket_last_index = (int) (dataframe_index_count / 10 * 6)
+validation_DF_bucket_last_index = training_DF_bucket_last_index + int (dataframe_index_count / 10 * 2)
+training_DF_bucket = dataframe.iloc[0:training_DF_bucket_last_index]
+validation_DF_bucket = dataframe.iloc[(training_DF_bucket_last_index + 1):validation_DF_bucket_last_index]
+evaluation_DF_bucket = dataframe.iloc[(validation_DF_bucket_last_index + 1):(dataframe_index_count - 1)]
 
 # Save data items to file
-dataDirectory = str("./data/")
-os.makedirs(dataDirectory, exist_ok=True)
-trainingDFBucket.to_csv(dataDirectory + "train.csv", index=False)
-validationDFBucket.to_csv(dataDirectory + "validation.csv", index=False)
-evaluationDFBucket.to_csv(dataDirectory + "evaluate.csv", index=False)
-predictSourceBucket.to_csv(dataDirectory + "predict_source.csv", index=False)
+data_directory = str("./data/")
+os.makedirs(data_directory, exist_ok=True)
+training_DF_bucket.to_csv(data_directory + "train.csv", index=False)
+validation_DF_bucket.to_csv(data_directory + "validation.csv", index=False)
+evaluation_DF_bucket.to_csv(data_directory + "evaluate.csv", index=False)
+predict_source_bucket.to_csv(data_directory + "predict_source.csv", index=False)

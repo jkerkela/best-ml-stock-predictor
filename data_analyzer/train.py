@@ -120,8 +120,7 @@ def train_model(
       num_epochs=1, 
       shuffle=False)
 
-  # Train the model, but do so inside a loop so that we can periodically assess
-  # loss metrics.
+  # Train the model, but do so inside a loop so that we can periodically assess loss metrics.
   print("Training " + model_type + " model...")
   print("RMSE (on training data):")
   training_rmse = []
@@ -276,9 +275,9 @@ pd.options.display.float_format = '{:.1f}'.format
 
 # Load data files 
 dataDirectory = str("../data_loader/data/")
-trainDataFile = pd.read_csv(dataDirectory + "train.csv", sep=",")
-training_examples = preprocess_features(trainDataFile)
-training_targets = preprocess_targets(trainDataFile)
+training_data = pd.read_csv(dataDirectory + "train.csv", sep=",")
+training_examples = preprocess_features(training_data)
+training_targets = preprocess_targets(training_data)
 print("Traning data key indicators:")
 display.display(training_examples.describe())
 display.display(training_targets.describe())

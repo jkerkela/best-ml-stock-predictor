@@ -115,8 +115,8 @@ def getRegressor(features,
   )
   return dnn_regressor
 	
-dataDirectory = str("../data_loader/data/")
-evaluation_data_file = pd.read_csv(dataDirectory + "evaluate.csv", sep=",")
+data_directory = str("../data_loader/data/")
+evaluation_data_file = pd.read_csv(data_directory + "evaluate.csv", sep=",")
 evaluation_examples = preprocess_features(evaluation_data_file)
 evaluation_targets = preprocess_targets(evaluation_data_file)
 print("Evaluate data key indicators:")

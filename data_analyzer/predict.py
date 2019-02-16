@@ -52,17 +52,20 @@ def preprocess_features(stock_dataframe):
   return processed_features
 
 def predict_with_model(model_regressor,
-                       source_data):
+                       source_data,
+					   template_frame):
   """predict with model"""
 
   predict_input_fn = lambda: my_input_fn(source_data)
-
+  
   final_predictions = model_regressor.predict(input_fn=predict_input_fn)
   final_predictions = np.array([item['predictions'][0] for item in final_predictions])
   predictionDataFrame = pd.DataFrame(final_predictions)
+  predictionDataFrame.rename(columns={predictionDataFrame.columns[0]: '1_month_future_stock_value_prediction'}, inplace=True)
+  predictionDataFrame = pd.concat([template_frame, predictionDataFrame], axis=1)
   results_dir = str("./results/")
   os.makedirs(results_dir, exist_ok=True)
-  predictionDataFrame.to_csv(results_dir + 'prediction.csv')
+  predictionDataFrame.to_csv(results_dir + 'prediction.csv', index=False)
   
 def getRegressor(features,
                  learning_rate,
@@ -87,17 +90,22 @@ def getRegressor(features,
 	model_dir="./models/NN_train_model"
   )
   return dnn_regressor
-	
+
+# Load source data  
 dataDirectory = str("../data_loader/data/")
-data_source_file = pd.read_csv(dataDirectory + "predict_source.csv", sep=",")
-data_features = preprocess_features(data_source_file)
+source_dataframe = pd.read_csv(dataDirectory + "predict_source.csv", sep=",")
+data_features = preprocess_features(source_dataframe)
 print("Prediction data key indicators:")
 display.display(data_features.describe())
+
+# Extract dates from source data to dataframe
+prediction_template_dataframe = source_dataframe["date"]
 
 regressor = getRegressor(features=data_features,
                         learning_rate=0.001,
                         hidden_units=[5,5])
 
-predict_with_model(regressor,
-                   data_features)
+predict_with_model(model_regressor=regressor,
+                   source_data=data_features,
+				   template_frame=prediction_template_dataframe)
 

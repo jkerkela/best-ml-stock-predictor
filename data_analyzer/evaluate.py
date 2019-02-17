@@ -11,7 +11,18 @@ import tools.tensor_object_provider as tensorObjProvider
 def evaluate_model(model_regressor,
                    evaluation_examples,
 				   evaluation_targets):
-  """Evaluate model"""
+  """Evaluates model.
+  
+  In addition to evaluation, this function also prints evaluation progress information
+  and a evaluation loss.
+  
+  Args:
+    model_regressor: A trained regressor object (DNN type)
+	evaluation_examples: A `DataFrame` containing one or more columns from
+      `stock_dataframe` to use as input features for evaluation.
+	evaluation_targets: A `DataFrame` containing exactly one column from
+      `stock_dataframe` to use as target for evaluation.
+  """
 
   evaluate_input_fn = lambda: tensorObjProvider.train_input_fn(
     evaluation_examples,

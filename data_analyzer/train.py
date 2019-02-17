@@ -27,10 +27,10 @@ def train_model(
     validation_examples,
     validation_targets,
     ):
-  """Trains a linear regression model of multiple features.
+  """Trains a model.
   
   In addition to training, this function also prints training progress information,
-  as well as a plot of the training and validation loss over time.
+  and training and validation loss.
   
   Args:
     model_type: A `String`, the model type to be trained

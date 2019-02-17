@@ -1,17 +1,25 @@
 from IPython import display
 import numpy as np
 import pandas as pd
+import os
 from sklearn import metrics
 import tensorflow as tf
 from tensorflow.python.data import Dataset
-import os
 import tools.data_item_processor as dataItemProcessor
 import tools.tensor_object_provider as tensorObjProvider
   
 def predict_with_model(model_regressor,
                        features,
 					   template_frame):
-  """predict with model"""
+  """Predicts with model regressor.
+  
+  Predictions are output to result file
+  
+  Args:
+    model_regressor: A trained regressor object (DNN type)
+	features: A DataFrame that contains the features
+	template_frame: A DataFrame that containing index column to be used in result file
+  """
 
   predict_input_fn = lambda: tensorObjProvider.predict_input_fn(features)
   final_predictions = model_regressor.predict(input_fn=predict_input_fn)
@@ -37,6 +45,6 @@ feature_columns = dataItemProcessor.construct_feature_columns(data_features)
 regressor = tensorObjProvider.get_DNN_regressor(features=feature_columns)
 
 predict_with_model(model_regressor=regressor,
-                   features=feature_columns,
+                   features=data_features,
 				   template_frame=prediction_template_dataframe)
 

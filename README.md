@@ -2,4 +2,4 @@
 
 Background:
 
-This repository is for playing with Tensorflow for building stock price predictor.
+This repository is for playing with Tensorflow for building stock price predictor (currently inactive).

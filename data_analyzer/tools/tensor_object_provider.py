@@ -36,7 +36,7 @@ def predict_input_fn(features):
   Args:
     features: pandas DataFrame of features
   Returns:
-    Tuple of (features, labels) for next data batch
+    features for data batch
   """
     
   # Convert pandas data into a dict of np arrays.

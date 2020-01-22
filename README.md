@@ -1,5 +1,3 @@
 # best-ml-stock-predictor
 
-Background:
-
-This repository is for playing with Tensorflow for building stock price predictor (currently inactive).
+This repository is for stock price predictor with Tensorflow.

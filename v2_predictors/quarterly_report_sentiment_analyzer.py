@@ -17,10 +17,13 @@ import pickle
 
 from edgar import *
 from tiingo import TiingoClient
+import yfinance as yf
 
 STOCK_PRICE_CHANGE_IN_PERCENTS_ON_REPORT_DAY_COLUMN = "price_change_in_percent"
 FINANCIALS_REPORT_LABEL_COLUMN = "concept"
 EARNINGS_REPORT_DATE = ""
+EMPTY_ROWS_IN_DEFAULT_EPS_REPORT = 4
+EPS_DIFF_COLUMN_NAME = 'Surprise(%)'
 
 parser = argparse.ArgumentParser("stock_predict")
 parser.add_argument('--email', required=True, help='User email address for accessing Edgar data for financials analysis')
@@ -79,7 +82,7 @@ def getPriceChangeOnReportDay(ticker, report_date_str, api_key):
     print(f"Price Change: {price_change:.2f} USD ({percent_change:.2f}%)")
     return percent_change
 
-# Get data frame with columns:
+# Get dataframe with columns:
 # "concept": which contains "label" values like us-gaap_ProfitLoss, us-gaap_NetIncomeLoss
 # report date e.g. "2025-03-31": which contains reported values for the period,
 # In 10-Q income and cash flow reports, the column name contains quarter postfix e.g. "2025-03-31 Q1",
@@ -94,8 +97,14 @@ def getDataFrameWithOnlyRelevantColumns(dataframe, earnings_date, earnings_date_
         except:
             print(f"Failed to find correct earnings date {earnings_date} on dataframe, returning empty dataframe")
             return pd.DataFrame()
-
-def parseDataFrameFromFinancials(company, report_count, retrain, api_key):
+           
+def getEPSSurpiseData(ticker, number_of_quarters):
+    stock = yf.Ticker(ticker)
+    return stock.get_earnings_dates(limit=(number_of_quarters + EMPTY_ROWS_IN_DEFAULT_EPS_REPORT)).dropna()
+    
+def parseDataFrameFromFinancials(ticker, report_count, retrain, api_key, email):
+    set_identity(email)
+    company = Company(ticker)
     df_final_combined_statements = pd.DataFrame()
     filings = company.get_filings()
     financials_filings = filings.filter(form=['10-K', '10-Q'])
@@ -141,20 +150,21 @@ def parseDataFrameFromFinancials(company, report_count, retrain, api_key):
                     global EARNINGS_REPORT_DATE
                     EARNINGS_REPORT_DATE = actual_earnings_release_date
                     compare_to_prev = True
+    df_eps_surprise_data = getEPSSurpiseData(ticker, report_count - 3)
+    df_final_combined_statements[EPS_DIFF_COLUMN_NAME] = df_eps_surprise_data[EPS_DIFF_COLUMN_NAME].values
+    print(f"DEBUG_KERKJO: check EPS surpise data: {df_eps_surprise_data}")
     df_final_combined_statements.fillna(0, inplace=True)
     df_only_numeric = df_final_combined_statements.apply(pd.to_numeric, errors="coerce")
     print(f"Check cleaned finalized financials data for training or prediction: {df_only_numeric}")
     return df_only_numeric
     
 def getFinancialsDataOnlyNumeric(email, ticker, retrain, api_key):
-    set_identity(email)
-    company = Company(ticker)
     if retrain:
         print(f"Getting last 12 financial data reports for: {ticker}")
-        return parseDataFrameFromFinancials(company, 12, retrain, api_key)
+        return parseDataFrameFromFinancials(ticker, 12, retrain, api_key, email)
     else:    
         print(f"Getting last financial data report for: {ticker}")
-        return parseDataFrameFromFinancials(company, 4, retrain, api_key)   
+        return parseDataFrameFromFinancials(ticker, 4, retrain, api_key, email)   
     
 def saveFinancialsModel(model, ticker, model_name="lightgbm_financials_predict_model"):
     with open(model_name + ticker + ".pkl", "wb") as f:
@@ -247,7 +257,7 @@ def main():
             importance_df.to_csv(f"{args.ticker}_feature_importance_data.csv", index=False)
             print(f"Check feature importance from: {args.ticker}_feature_importance_data.csv")
             
-            #TODO: we have serius overfitting problem: Average training RMSE: 0.8394369432932242, Average validation RMSE: 6.4898482402863245
+            #TODO: we have overfitting problem: Average training RMSE: 0.49, Average validation RMSE: 3.15
             print(f"Model training RMSE scores: {train_rmse_scores}")
             print(f"Average training RMSE: {numpy.mean(train_rmse_scores)}")
             print(f"Model validation RMSE scores: {validation_rmse_scores}")

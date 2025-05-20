@@ -9,6 +9,8 @@ from huggingface_hub import login
 from langchain_huggingface import HuggingFaceEndpoint
 from langchain_ollama import OllamaEmbeddings
 import bm25s
+import faiss
+from sentence_transformers import CrossEncoder
 
 from functools import partial
 
@@ -16,6 +18,8 @@ import bs4
 from langchain import hub
 from langchain_community.document_loaders import WebBaseLoader
 from langchain_community.vectorstores import FAISS
+from langchain_community.document_compressors import JinaRerank
+from langchain.retrievers import ContextualCompressionRetriever
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langgraph.graph import START, StateGraph
@@ -37,7 +41,7 @@ Instructions: \
 Use the provided context to answer the question at the end. \
 Treat the whole context as equal, do not prioritize any section, even if question contains section information. \
 If you don't find the answer from the context, just say that you don't know. \
-Give one answer and stop after you have provided first answer.
+Always immdiately stop after you have provided first answer, do not provide follow-up questions or answers.
 
 Context: {context}
 
@@ -79,9 +83,9 @@ class LLMState(TypedDict):
     context: List[Document]
     answer: str
     
-
-def retrieveContextFromStore(state, vector_store, bm25_index_data):
-    top_k = 6
+def retrieveContextFromStore(state, reranker_llm, vector_store, bm25_index_data):
+    top_k = 10
+    top_k_rerank = 5
     query = state["query"]
     retrieved_docs = vector_store.similarity_search(query["query"], k=top_k)
     retrieved_doc_ids = []
@@ -93,7 +97,7 @@ def retrieveContextFromStore(state, vector_store, bm25_index_data):
     for doc in retrieved_docs:
         doc_id = doc.metadata.get("id")
         if doc_id is not None:
-            retrieved_doc_ids.add(doc_id)
+            retrieved_doc_ids.append(doc_id)
     
     
     bm25_engine = bm25_index_data["bm_engine"]
@@ -126,13 +130,18 @@ def retrieveContextFromStore(state, vector_store, bm25_index_data):
             "doc": orig_doc_full,
         })
         
-    #TODO: we can do rank fusion of bm25 and vectorstore embedding matches
     combined_docs = []
     if bm25_results:
         combined_docs += [item["doc"] for item in bm25_results]
     if retrieved_docs:
-        combined_docs += retrieved_docs  
-    return {"context": combined_docs}
+        combined_docs += retrieved_docs
+    
+    doc_texts = [doc.page_content for doc in combined_docs]
+    doc_rank_infos = reranker_llm.rank(query["query"], doc_texts, top_k=top_k_rerank)
+    reranked_docs = []
+    for doc_rank_info in doc_rank_infos:
+        reranked_docs.append(combined_docs[doc_rank_info["corpus_id"]])
+    return {"context": reranked_docs}
 
 def analyzeQuery(state, llm):
     query = {"query": state['question'], "section": QUERY_SPLIT_UNDEFINED_LABEL}
@@ -190,13 +199,19 @@ def main():
         temperature=0.1,
         return_full_text=False
     )
+    
+    reranker_llm = CrossEncoder("jinaai/jina-reranker-v1-tiny-en", trust_remote_code=True)
 
     embeddings = OllamaEmbeddings(model="llama3")
     all_splits = None
     if not args.use_existing_storage:
         print(f"DEBUG: Loading external data source for RAG context")
         external_data = loadDataSourceFromWeb(WEB_SOURCE)
-        text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200, add_start_index=True,)
+        text_splitter = RecursiveCharacterTextSplitter(chunk_size=1500,
+            chunk_overlap=100,
+            add_start_index=False,
+            separators=["\n\n"]
+        )
         all_splits = text_splitter.split_documents(external_data)
         
         total_documents = len(all_splits)
@@ -219,6 +234,7 @@ def main():
             bm25_index_data = pickle.load(f)
     else:
         print(f"DEBUG: Storing context data and adding embeddings to it")
+        faiss.omp_set_num_threads(4)
         vector_store = FAISS.from_documents(all_splits, embeddings)
         vector_store.save_local(VECTOR_STORAGE)
         
@@ -233,7 +249,7 @@ def main():
     print(f"DEBUG: running the LLM with augmented context")
     graph_builder = StateGraph(LLMState).add_sequence([
         ("analyzeQuery", partial(analyzeQuery, llm=llm)),
-        ("retrieveContext", partial(retrieveContextFromStore, vector_store=vector_store, bm25_index_data=bm25_index_data)),
+        ("retrieveContext", partial(retrieveContextFromStore, reranker_llm=reranker_llm, vector_store=vector_store, bm25_index_data=bm25_index_data)),
         ("generateResponse", partial(generateResponse, llm=llm))
     ])
     graph_builder.add_edge(START, "analyzeQuery")

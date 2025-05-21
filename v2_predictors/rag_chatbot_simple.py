@@ -1,8 +1,12 @@
 import os
+from enum import Enum
 import argparse
 import json
 import pickle
+import fitz
+import magic
 import numpy as np
+from urllib.parse import urlparse
 
 from transformers import pipeline
 from huggingface_hub import login
@@ -30,10 +34,16 @@ from typing import Literal
 WEB_SOURCE = "https://lilianweng.github.io/posts/2023-06-23-agent/"
 
 os.environ["LANGSMITH_TRACING"] = "true"
+
 QUERY_SPLIT_START_LABEL = "beginning"
 QUERY_SPLIT_MID_LABEL = "middle"
 QUERY_SPLIT_END_LABEL = "end"
 QUERY_SPLIT_UNDEFINED_LABEL = "undefined"
+
+#TODO: extend to types that FITZ doesn't support, when needed
+class FileTypeSupport(Enum):
+    FITZ = 1
+    NON_SUPPORTED = 2
 
 #TODO: the answer is too long and it contains extra information not directly related to question.
 RAG_PROMPT = """
@@ -52,7 +62,7 @@ QUERY_ANALYSIS_PROMPT = """
 Generate a JSON object for the following question:
 {question}
 
-Return valid JSON contaning query and section in format:
+Return valid JSON containing query and section, in format:
 {{
     "section": "<one of 'beginning', 'middle', 'end', undefined>",
     "query": "<question>"
@@ -64,9 +74,12 @@ VECTOR_STORAGE = "faiss_index_RAG"
 BM25_STORAGE = "bm25_index.pkl"
 
 parser = argparse.ArgumentParser("stock_predict")
-parser.add_argument('--langsmith_api_key', required=True, help='API key')
-parser.add_argument('--huggingface_api_key', required=True, help='API key')
+parser.add_argument('--langsmith_api_key', required=True)
+parser.add_argument('--huggingface_api_key', required=True)
 parser.add_argument('--use_existing_storage', dest='use_existing_storage', default=False, action=argparse.BooleanOptionalAction)
+parser.add_argument('--query', required=True)
+parser.add_argument('--sources', nargs='+',
+    help='The sources to use to answer for query, can be different types of documents or web page, if used with --use_existing_storage, the souce will be appended to storage', required=False)
 args = parser.parse_args()
 
 class SearchQuery(TypedDict):
@@ -82,7 +95,28 @@ class LLMState(TypedDict):
     query: SearchQuery
     context: List[Document]
     answer: str
-    
+
+def isValidUrl(url):
+    try:
+        result = urlparse(url)
+        return all([result.scheme, result.netloc])
+    except ValueError:
+        return False
+        
+def getFileTypeSupport(file_path):
+    supported_fitz_types = [
+        "application/pdf", "application/vnd.ms-xpsdocument",
+        "application/epub+zip", "application/x-cbz", "application/x-cbr"
+    ]
+
+    mime = magic.Magic(mime=True)
+    file_type = mime.from_file(file_path)
+
+    if file_type in supported_fitz_types:
+        return FileTypeSupport.FITZ
+    else:
+        return FileTypeSupport.NON_SUPPORTED
+        
 def retrieveContextFromStore(state, reranker_llm, vector_store, bm25_index_data):
     top_k = 10
     top_k_rerank = 5
@@ -120,7 +154,7 @@ def retrieveContextFromStore(state, reranker_llm, vector_store, bm25_index_data)
         if not orig_doc_full:
             continue
         score = bm25_scores[idx]
-        # Skip if document is already in the dense retrieval results
+        # Skip if document is already in the vector store retrieval results
         if original_index in retrieved_doc_ids:
             continue
         bm25_results.append({
@@ -186,7 +220,8 @@ def loadDataSourceFromWeb(web_page):
     return loader.load()
     
 
-def main(): 
+def main():
+    print(f"DEBUG: starting to load depedency llm models")
     if not os.environ.get("LANGSMITH_API_KEY"):
         os.environ["LANGSMITH_API_KEY"] = args.langsmith_api_key
         
@@ -203,21 +238,35 @@ def main():
     reranker_llm = CrossEncoder("jinaai/jina-reranker-v1-tiny-en", trust_remote_code=True)
 
     embeddings = OllamaEmbeddings(model="llama3")
-    all_splits = None
     if not args.use_existing_storage:
         print(f"DEBUG: Loading external data source for RAG context")
-        external_data = loadDataSourceFromWeb(WEB_SOURCE)
+        source_splits = []
         text_splitter = RecursiveCharacterTextSplitter(chunk_size=1500,
             chunk_overlap=100,
             add_start_index=False,
             separators=["\n\n"]
         )
-        all_splits = text_splitter.split_documents(external_data)
+        for source in args.sources:
+            if isValidUrl(source):
+                external_data_as_doc_type = loadDataSourceFromWeb(source)
+                source_splits += text_splitter.split_documents(external_data_as_doc_type)
+            else:
+                support = getFileTypeSupport(source)
+                if support == FileTypeSupport.FITZ:
+                    doc = fitz.open(source)
+                    external_data_as_doc_type = []
+                    for page in doc:
+                        text = page.get_text("text")
+                        metadata = {"page": page.number}
+                        external_data_as_doc_type.append(Document(page_content=text, metadata=metadata))
+                    source_splits += text_splitter.split_documents(external_data_as_doc_type)
+                else:
+                    raise Exception("File type not supported")
         
-        total_documents = len(all_splits)
+        total_documents = len(source_splits)
         third = total_documents // 3
 
-        for i, document in enumerate(all_splits):
+        for i, document in enumerate(source_splits):
             document.metadata["id"] = i
             if i < third:
                 document.metadata["section"] = QUERY_SPLIT_START_LABEL
@@ -235,18 +284,18 @@ def main():
     else:
         print(f"DEBUG: Storing context data and adding embeddings to it")
         faiss.omp_set_num_threads(4)
-        vector_store = FAISS.from_documents(all_splits, embeddings)
+        vector_store = FAISS.from_documents(source_splits, embeddings)
         vector_store.save_local(VECTOR_STORAGE)
         
-        documents_as_text = [doc.page_content for doc in all_splits]
+        documents_as_text = [doc.page_content for doc in source_splits]
         tokenized_corpus = bm25s.tokenize(documents_as_text, stopwords="en")
         bm25_engine = bm25s.BM25(corpus=documents_as_text)
         bm25_engine.index(tokenized_corpus)
-        bm25_index_data = {"bm_engine": bm25_engine, "documents": all_splits}
+        bm25_index_data = {"bm_engine": bm25_engine, "documents": source_splits}
         with open(BM25_STORAGE, "wb") as f:
             pickle.dump(bm25_index_data, f)
     
-    print(f"DEBUG: running the LLM with augmented context")
+    print(f"DEBUG: running the LLM with augmented context for query: {args.query}")
     graph_builder = StateGraph(LLMState).add_sequence([
         ("analyzeQuery", partial(analyzeQuery, llm=llm)),
         ("retrieveContext", partial(retrieveContextFromStore, reranker_llm=reranker_llm, vector_store=vector_store, bm25_index_data=bm25_index_data)),
@@ -256,7 +305,7 @@ def main():
     graph = graph_builder.compile()
 
     for step in graph.stream(
-        {"question": "What does the beginning of the post say about Task Decomposition?"},
+        {"question": args.query},
         stream_mode="updates",
     ):
         print(f"{step}\n\n----------------\n")

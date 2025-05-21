@@ -77,9 +77,11 @@ parser = argparse.ArgumentParser("stock_predict")
 parser.add_argument('--langsmith_api_key', required=True)
 parser.add_argument('--huggingface_api_key', required=True)
 parser.add_argument('--use_existing_storage', dest='use_existing_storage', default=False, action=argparse.BooleanOptionalAction)
+parser.add_argument('--append_to_storage', dest='append_to_existing_storage',
+    help='data source is appended to existing storage if used, if not data source will be stored to in memory storage only and used from there', default=False, action=argparse.BooleanOptionalAction)
 parser.add_argument('--query', required=True)
-parser.add_argument('--sources', nargs='+',
-    help='The sources to use to answer for query, can be different types of documents or web page, if used with --use_existing_storage, the souce will be appended to storage', required=False)
+parser.add_argument('--sources', nargs='+', required=False,
+    help='The sources to use to answer for query, can be different types of documents or web page, if used with --append_to_storage, the sources will be stored to persistent storage')
 args = parser.parse_args()
 
 class SearchQuery(TypedDict):
@@ -218,7 +220,17 @@ def loadDataSourceFromWeb(web_page):
         ),
     )
     return loader.load()
-    
+   
+def updateRankingStorage(source_splits, store_persistently):
+    documents_as_text = [doc.page_content for doc in source_splits]
+    tokenized_corpus = bm25s.tokenize(documents_as_text, stopwords="en")
+    bm25_engine = bm25s.BM25(corpus=documents_as_text)
+    bm25_engine.index(tokenized_corpus)
+    bm25_index_data = {"bm_engine": bm25_engine, "documents": source_splits}
+    if store_persistently:
+        with open(BM25_STORAGE, "wb") as f:
+            pickle.dump(bm25_index_data, f)
+    return bm25_index_data
 
 def main():
     print(f"DEBUG: starting to load depedency llm models")
@@ -238,9 +250,9 @@ def main():
     reranker_llm = CrossEncoder("jinaai/jina-reranker-v1-tiny-en", trust_remote_code=True)
 
     embeddings = OllamaEmbeddings(model="llama3")
-    if not args.use_existing_storage:
-        print(f"DEBUG: Loading external data source for RAG context")
-        source_splits = []
+    print(f"DEBUG: Loading external data source for RAG context")
+    source_splits = []
+    if args.sources:
         text_splitter = RecursiveCharacterTextSplitter(chunk_size=1500,
             chunk_overlap=100,
             add_start_index=False,
@@ -278,22 +290,26 @@ def main():
     vector_store = None
     bm25_index_data = None
     if args.use_existing_storage:
+        print(f"DEBUG: loading context data from existing storage")
+        ranking_storage_needs_reindexing = False
         vector_store = FAISS.load_local(VECTOR_STORAGE, embeddings, allow_dangerous_deserialization=True)
         with open(BM25_STORAGE, "rb") as f:
             bm25_index_data = pickle.load(f)
-    else:
-        print(f"DEBUG: Storing context data and adding embeddings to it")
+    
+    if args.sources:
         faiss.omp_set_num_threads(4)
-        vector_store = FAISS.from_documents(source_splits, embeddings)
-        vector_store.save_local(VECTOR_STORAGE)
-        
-        documents_as_text = [doc.page_content for doc in source_splits]
-        tokenized_corpus = bm25s.tokenize(documents_as_text, stopwords="en")
-        bm25_engine = bm25s.BM25(corpus=documents_as_text)
-        bm25_engine.index(tokenized_corpus)
-        bm25_index_data = {"bm_engine": bm25_engine, "documents": source_splits}
-        with open(BM25_STORAGE, "wb") as f:
-            pickle.dump(bm25_index_data, f)
+        in_memory_vector_store = FAISS.from_documents(source_splits, embeddings)
+        if args.use_existing_storage:
+            vector_store.merge_from(in_memory_vector_store)
+        else:
+            vector_store = in_memory_vector_store
+        if args.append_to_storage:
+            print(f"DEBUG: Storing context data and adding embeddings to it")
+            vector_store.save_local(VECTOR_STORAGE)
+            bm25_index_data = updateRankingStorage(source_splits, True)
+        else:
+            bm25_index_data = updateRankingStorage(source_splits, False)
+
     
     print(f"DEBUG: running the LLM with augmented context for query: {args.query}")
     graph_builder = StateGraph(LLMState).add_sequence([

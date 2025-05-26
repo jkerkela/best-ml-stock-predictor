@@ -2,6 +2,7 @@ import argparse
 import pickle
 import json
 import asyncio
+import time
 
 from enum import Enum
 from typing import TypedDict, Tuple
@@ -29,7 +30,6 @@ parser = argparse.ArgumentParser("stock_predict")
 parser.add_argument('--huggingface_api_key', required=True)
 parser.add_argument('--telegram_api_token', required=True)
 parser.add_argument('--telegram_notification_group_id', required=True)
-parser.add_argument('--force_fetch_news_data', dest='force_fetch_news_data', default=False, action=argparse.BooleanOptionalAction)
 parser.add_argument('--tickers', nargs='+', required=True, help='The tickers to monitor')
 args = parser.parse_args()
 
@@ -40,7 +40,6 @@ NEWS_ITEM_SUMMARY_ELEMENT = "companies-card-summary"
 NEWS_ITEM_URL_ELEMENT = "text-gray-dark feed-link"
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
 
 RELEVANT_ARTICLE_JSON_KEY_NAME = "relevant"
 NEWS_ITEM_REVEVANCE_CHECK_PROMPT= """
@@ -80,56 +79,53 @@ class LLMState(TypedDict):
     latest_fetched_news_per_ticker: dict[str, [NewsItem]]
     
 
-def getLatestNewsItems(state: LLMState, tickers, force_fetch_news_data):
+def getLatestNewsItems(state: LLMState, tickers):
     print("DEBUG: Getting latest news items")
-    news_data_loaded_from_disk = False
-    if not force_fetch_news_data:
-        try:
-            state["latest_fetched_news_per_ticker"] = loadNewsObjectFromDisk()
-            news_data_loaded_from_disk = True
-        except: 
-            pass
-    if force_fetch_news_data or news_data_loaded_from_disk == False:
-        for ticker in tickers:
-            print(f"DEBUG: Getting latest news items for {ticker}")
-            news_dir_url = SCRAPING_SOURCE_NEWS_URL + ticker
-            response = requests.get(news_dir_url)
-            if response.status_code != 200:
-                print("Failed to retrieve page:", response.status_code)
-                continue
-            soup = BeautifulSoup(response.text, "html.parser")
-            article_summaries = soup.find_all("div", class_=NEWS_ITEM_SUMMARY_ELEMENT)
-            article_urls = soup.find_all("a", class_=NEWS_ITEM_URL_ELEMENT)
-            latest_article_summaries = article_summaries[:NEWS_ITEMS_TO_FETCH_PER_TICKER]
-            latest_article_urls = article_urls[:NEWS_ITEMS_TO_FETCH_PER_TICKER]
-            for index, url in enumerate(latest_article_urls):
-                full_url = SCRAPING_SOURCE_BASE_URL + url['href']
-                summary_text = latest_article_summaries[index].get_text(separator=" ", strip=True)
-                if ticker in state["latest_fetched_news_per_ticker"]:
-                    for news_item in state["latest_fetched_news_per_ticker"][ticker]:
-                        if news_item["news_url"] != full_url:
-                            news_item: NewsItem = {
-                                "news_url" : full_url,
-                                "news_summary" : summary_text, 
-                                "item_status" : ItemStatus.CHECK_RELEVANCE, 
-                                "sentiment" : ("undefined", 0)
-                            }
-                            state["latest_fetched_news_per_ticker"][ticker].append(news_item)
-                else:
-                    news_item: NewsItem = {
-                        "news_url" : full_url,
-                        "news_summary" : summary_text, 
-                        "item_status" : ItemStatus.CHECK_RELEVANCE, 
-                        "sentiment" : ("undefined", 0)
-                    }
-                    state["latest_fetched_news_per_ticker"][ticker] = [news_item]   
+    try:
+        state["latest_fetched_news_per_ticker"] = loadNewsObjectFromDisk()
+    except: 
+        pass
+    for ticker in tickers:
+        print(f"DEBUG: Getting latest news items for {ticker}")
+        news_dir_url = SCRAPING_SOURCE_NEWS_URL + ticker
+        response = requests.get(news_dir_url)
+        if response.status_code != 200:
+            print("Failed to retrieve page:", response.status_code)
+            continue
+        soup = BeautifulSoup(response.text, "html.parser")
+        article_summaries = soup.find_all("div", class_=NEWS_ITEM_SUMMARY_ELEMENT)
+        article_urls = soup.find_all("a", class_=NEWS_ITEM_URL_ELEMENT)
+        latest_article_summaries = article_summaries[:NEWS_ITEMS_TO_FETCH_PER_TICKER]
+        latest_article_urls = article_urls[:NEWS_ITEMS_TO_FETCH_PER_TICKER]
+        for index, url in enumerate(latest_article_urls):
+            full_url = SCRAPING_SOURCE_BASE_URL + url['href']
+            summary_text = latest_article_summaries[index].get_text(separator=" ", strip=True)
+            if ticker in state["latest_fetched_news_per_ticker"]:
+                for news_item in state["latest_fetched_news_per_ticker"][ticker]:
+                    if news_item["news_url"] != full_url:
+                        news_item: NewsItem = {
+                            "news_url" : full_url,
+                            "news_summary" : summary_text, 
+                            "item_status" : ItemStatus.CHECK_RELEVANCE, 
+                            "sentiment" : ("undefined", 0)
+                        }
+                        state["latest_fetched_news_per_ticker"][ticker].append(news_item)
+            else:
+                news_item: NewsItem = {
+                    "news_url" : full_url,
+                    "news_summary" : summary_text, 
+                    "item_status" : ItemStatus.CHECK_RELEVANCE, 
+                    "sentiment" : ("undefined", 0)
+                }
+                state["latest_fetched_news_per_ticker"][ticker] = [news_item]
+    saveNewsObjectToDisk(state["latest_fetched_news_per_ticker"])
 
 #TODO: this can be combined to postNotification agentic step
 def checkNewsItemsRelevance(state: LLMState, relevance_check_llm):
     print("DEBUG: Filtering relevant news items")
     rag_prompt = PromptTemplate.from_template(NEWS_ITEM_REVEVANCE_CHECK_PROMPT)
-    for ticker_news_item_dict in state["latest_fetched_news_per_ticker"].values():
-        for news_item in ticker_news_item_dict:
+    for ticker in state["latest_fetched_news_per_ticker"]:
+        for news_item in state["latest_fetched_news_per_ticker"][ticker]:
             if news_item["item_status"] == ItemStatus.CHECK_RELEVANCE:
                 print(f"DEBUG: Doing relevance check for:\n {news_item["news_summary"]}")
                 messages = rag_prompt.invoke({"context": news_item["news_summary"], "key_name": RELEVANT_ARTICLE_JSON_KEY_NAME})
@@ -148,14 +144,15 @@ def checkNewsItemsRelevance(state: LLMState, relevance_check_llm):
                         print(f"Error parsing the response with error: {e}")
                 else:
                     print("Warning: Unexpected response format from LLM.")
+    saveNewsObjectToDisk(state["latest_fetched_news_per_ticker"])
     
 def analyzeNewsItems(state: LLMState):
     print("DEBUG: Analyzing news items")
     tokenizer = AutoTokenizer.from_pretrained("ProsusAI/finbert")
     model = AutoModelForSequenceClassification.from_pretrained("ProsusAI/finbert")
     model.to(DEVICE)
-    for ticker_news_item_dict in state["latest_fetched_news_per_ticker"].values():
-        for news_item in ticker_news_item_dict:
+    for ticker in state["latest_fetched_news_per_ticker"]:
+        for news_item in state["latest_fetched_news_per_ticker"][ticker]:
             if news_item["item_status"] == ItemStatus.DO_SENTIMENT_ANALYSIS:
                 print(f"DEBUG: Doing sentiment analysis for:\n {news_item["news_summary"]}")
                 inputs = tokenizer(news_item["news_summary"], return_tensors="pt", truncation=True, padding=True)
@@ -174,6 +171,7 @@ def analyzeNewsItems(state: LLMState):
                 print(f'Sentiment: {sentimentFinbert}, probabilities: {probabilityFinbert}')
                 news_item["sentiment"] = (sentimentFinbert, probabilityFinbert)
                 news_item["item_status"] = ItemStatus.SENTIMENT_DONE
+    saveNewsObjectToDisk(state["latest_fetched_news_per_ticker"])
             
 
 @tool
@@ -210,18 +208,17 @@ async def postNotification(message, telegram_bot, notification_group):
                     
 async def postNewsItems(state: LLMState, agent_executor, telegram_api_token, notification_group):
     print("DEBUG: posting news items")
-    for ticker_news_item_dict in state["latest_fetched_news_per_ticker"].values():
-        for news_item in ticker_news_item_dict:
+    for ticker in state["latest_fetched_news_per_ticker"]:
+        for news_item in state["latest_fetched_news_per_ticker"][ticker]:
             if news_item["item_status"] == ItemStatus.SENTIMENT_DONE:
                 print("DEBUG: Found news item with sentiment")
                 result = await agent_executor.ainvoke(
-                    {"messages": [HumanMessage(content=f"Post the notification with items: message='New news item with positive sentiment found in: {news_item["news_url"]}', telegram_api_token={telegram_api_token}, notification_group={notification_group}. ")]}
+                    {"messages": [HumanMessage(content=f"Post the notification with items: message='New news item for {ticker} with positive sentiment found in: {news_item["news_url"]}', telegram_api_token={telegram_api_token}, notification_group={notification_group}. ")]}
                 )
                 print(f"DEBUG: agent return: {result}")
-                news_item["item_status"] = ItemStatus.DO_SENTIMENT_ANALYSIS
+                news_item["item_status"] = ItemStatus.POSTED
     saveNewsObjectToDisk(state["latest_fetched_news_per_ticker"])
 
- 
 async def main(): 
     login(token=args.huggingface_api_key)
     
@@ -239,9 +236,9 @@ async def main():
         temperature=0
     ).bind_tools(tools)
     agent_executor = create_react_agent(agentic_llm, tools=tools)
-    
+    #TODO: add conditionals here between the steps, then we don't need to check it from status anymore
     graph_builder = StateGraph(LLMState).add_sequence([
-        ("getLatestNewsItems", partial(getLatestNewsItems, tickers=args.tickers, force_fetch_news_data=args.force_fetch_news_data)),
+        ("getLatestNewsItems", partial(getLatestNewsItems, tickers=args.tickers)),
         ("checkNewsItemsRelevance", partial(checkNewsItemsRelevance, relevance_check_llm=llm)),
         ("analyzeNewsItems", partial(analyzeNewsItems)),
         ("postNewsItems", partial(postNewsItems, agent_executor=agent_executor, telegram_api_token=args.telegram_api_token, notification_group=args.telegram_notification_group_id))
@@ -249,9 +246,10 @@ async def main():
     graph_builder.add_edge(START, "getLatestNewsItems")
     graph = graph_builder.compile()
 
-    
-    result = await graph.ainvoke({ "latest_fetched_news_per_ticker": {}})
-    print(result)
+    while True:
+        result = await graph.ainvoke({ "latest_fetched_news_per_ticker": {}})
+        print(result)
+        time.sleep(60)
 
 if __name__ == '__main__':
     try:

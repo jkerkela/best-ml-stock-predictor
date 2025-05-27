@@ -3,23 +3,22 @@ import pickle
 import json
 import asyncio
 import time
+import requests
+from bs4 import BeautifulSoup
 
 from enum import Enum
 from typing import TypedDict, Tuple
 from functools import partial
 
-import requests
-from bs4 import BeautifulSoup
-
-from scipy.special import softmax
 import torch
-from langgraph.graph import START, StateGraph
+from scipy.special import softmax
+from langgraph.graph import START, END, StateGraph
 from langgraph.prebuilt import create_react_agent
 from langchain_core.prompts import PromptTemplate
 from langchain_core.messages import ToolMessage, HumanMessage
-
 from langchain.tools import tool
 from langchain_ollama import ChatOllama
+
 from transformers import AutoTokenizer, AutoModelForSequenceClassification, pipeline
 from huggingface_hub import login
 
@@ -38,6 +37,7 @@ SCRAPING_SOURCE_BASE_URL = "https://www.stocktitan.net"
 SCRAPING_SOURCE_NEWS_URL = SCRAPING_SOURCE_BASE_URL + "/news/"
 NEWS_ITEM_SUMMARY_ELEMENT = "companies-card-summary"
 NEWS_ITEM_URL_ELEMENT = "text-gray-dark feed-link"
+SENTIMENT_THRESHOLD = 0.8
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -63,11 +63,12 @@ def loadNewsObjectFromDisk(pickle_name="stock_news_items"):
         return pickle.load(f)
         
 class ItemStatus(Enum):
-    CHECK_RELEVANCE = 0
-    DO_SENTIMENT_ANALYSIS = 1
-    SENTIMENT_DONE = 2
-    IGNORE = 3
+    CHECK_RELEVANCE = 1
+    DO_SENTIMENT_ANALYSIS = 2
+    SENTIMENT_DONE = 3
     POSTED = 4
+    IGNORE = 5
+    UNDEFINED = 6
 
 class NewsItem(TypedDict):
     news_url: str
@@ -145,7 +146,8 @@ def checkNewsItemsRelevance(state: LLMState, relevance_check_llm):
                 else:
                     print("Warning: Unexpected response format from LLM.")
     saveNewsObjectToDisk(state["latest_fetched_news_per_ticker"])
-    
+
+#TODO: test with news items that should be negative
 def analyzeNewsItems(state: LLMState):
     print("DEBUG: Analyzing news items")
     tokenizer = AutoTokenizer.from_pretrained("ProsusAI/finbert")
@@ -205,20 +207,44 @@ async def postNotification(message, telegram_bot, notification_group):
             else:
                 print(f"DEBUG: message send attempt failed with error: {e}, retry attemps exceeded")
                 return False
-                    
+                  
+def isSentimentOverThreshold(sentiment, probability):
+    return (sentiment == "positive" or sentiment == "negative") and probability > SENTIMENT_THRESHOLD:
+      
 async def postNewsItems(state: LLMState, agent_executor, telegram_api_token, notification_group):
     print("DEBUG: posting news items")
     for ticker in state["latest_fetched_news_per_ticker"]:
         for news_item in state["latest_fetched_news_per_ticker"][ticker]:
             if news_item["item_status"] == ItemStatus.SENTIMENT_DONE:
-                print("DEBUG: Found news item with sentiment")
-                result = await agent_executor.ainvoke(
-                    {"messages": [HumanMessage(content=f"Post the notification with items: message='New news item for {ticker} with positive sentiment found in: {news_item["news_url"]}', telegram_api_token={telegram_api_token}, notification_group={notification_group}. ")]}
-                )
-                print(f"DEBUG: agent return: {result}")
-                news_item["item_status"] = ItemStatus.POSTED
+                if isSentimentOverThreshold(news_item["sentiment"][0], news_item["sentiment"][1]):
+                    print(f"DEBUG: Found news item with sentiment: {news_item["sentiment"][0]} and probability: {news_item["sentiment"][1]}")
+                    result = await agent_executor.ainvoke(
+                        {"messages": [HumanMessage(content=f"Post the notification with items: message='New news item for {ticker} with {news_item["sentiment"][0]} sentiment found in: {news_item["news_url"]}', telegram_api_token={telegram_api_token}, notification_group={notification_group}. ")]}
+                    )
+                    print(f"DEBUG: agent return: {result}")
+                    news_item["item_status"] = ItemStatus.POSTED
     saveNewsObjectToDisk(state["latest_fetched_news_per_ticker"])
 
+def getNextStage(state: LLMState):
+    lowest_state_found = ItemStatus.UNDEFINED
+    for ticker in state["latest_fetched_news_per_ticker"]:
+        for news_item in state["latest_fetched_news_per_ticker"][ticker]:
+            if news_item["item_status"].value < lowest_state_found.value:
+                lowest_state_found = news_item["item_status"]
+    if lowest_state_found == ItemStatus.CHECK_RELEVANCE:
+        return {"next_stage": "checkNewsItemsRelevance"}
+    elif lowest_state_found == ItemStatus.DO_SENTIMENT_ANALYSIS:
+        return {"next_stage": "analyzeNewsItems"}
+    elif lowest_state_found == ItemStatus.SENTIMENT_DONE:
+        return {"next_stage": "postNewsItems"}
+    elif lowest_state_found == ItemStatus.POSTED:
+        return {"next_stage": END}
+    elif lowest_state_found == ItemStatus.IGNORE:
+        return {"next_stage": END}
+    else:
+        return {"next_stage": "getLatestNewsItems"}
+
+        
 async def main(): 
     login(token=args.huggingface_api_key)
     
@@ -236,15 +262,26 @@ async def main():
         temperature=0
     ).bind_tools(tools)
     agent_executor = create_react_agent(agentic_llm, tools=tools)
-    #TODO: add conditionals here between the steps, then we don't need to check it from status anymore
-    graph_builder = StateGraph(LLMState).add_sequence([
-        ("getLatestNewsItems", partial(getLatestNewsItems, tickers=args.tickers)),
-        ("checkNewsItemsRelevance", partial(checkNewsItemsRelevance, relevance_check_llm=llm)),
-        ("analyzeNewsItems", partial(analyzeNewsItems)),
-        ("postNewsItems", partial(postNewsItems, agent_executor=agent_executor, telegram_api_token=args.telegram_api_token, notification_group=args.telegram_notification_group_id))
-    ])
-    graph_builder.add_edge(START, "getLatestNewsItems")
-    graph = graph_builder.compile()
+    workflow = StateGraph(LLMState)
+    workflow.add_node("getNextStage", getNextStage)
+    workflow.add_node("getLatestNewsItems", partial(getLatestNewsItems, tickers=args.tickers))
+    workflow.add_node("checkNewsItemsRelevance", partial(checkNewsItemsRelevance, relevance_check_llm=llm))
+    workflow.add_node("analyzeNewsItems", partial(analyzeNewsItems))
+    workflow.add_node("postNewsItems", partial(
+        postNewsItems, 
+        agent_executor=agent_executor,
+        telegram_api_token=args.telegram_api_token,
+        notification_group=args.telegram_notification_group_id)
+    )
+    
+    workflow.add_edge(START, "getNextStage")
+    workflow.add_edge("getLatestNewsItems", "getNextStage")
+    workflow.add_edge("checkNewsItemsRelevance", "getNextStage")
+    workflow.add_edge("analyzeNewsItems", "getNextStage")
+    workflow.add_edge("postNewsItems", "getNextStage")
+    workflow.add_conditional_edges("getNextStage", lambda state: state["next_stage"], 
+    ["getLatestNewsItems", "checkNewsItemsRelevance", "analyzeNewsItems", "postNewsItems", END])
+    graph = workflow.compile()
 
     while True:
         result = await graph.ainvoke({ "latest_fetched_news_per_ticker": {}})

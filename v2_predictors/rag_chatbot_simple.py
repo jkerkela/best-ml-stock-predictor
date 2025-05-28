@@ -6,7 +6,9 @@ import pickle
 import fitz
 import magic
 import numpy as np
+import requests
 from urllib.parse import urlparse
+from bs4 import BeautifulSoup
 
 from transformers import pipeline
 from huggingface_hub import login
@@ -84,7 +86,7 @@ RETRIEVAL_ANALYSIS_CORRECTION_PROMPT= """
 Check if the document contains keyword(s) or semantic meaning related to the question
 Give answer in json format as:\n
 {{\n
-    "{key_name}": "<one of 'YES', 'NO'">\n
+    "relevant": "<one of 'YES', 'NO'">\n
 }}\n
 
 Document: {document}\n
@@ -195,7 +197,7 @@ def getCorrectionCheckedDocs(correction_check_llm, query, docs_after_re_ranking)
             print(f"DEBUG: Check query analysis answer: {response}")
             response_text = response[0].get("generated_text", "")
             try:
-                response_val = json.loads(response_text)[RELEVANT_ARTICALE_JSON_KEY_NAME]
+                response_val = json.loads(response_text)["relevant"]
                 if response_val == "YES":
                     correction_passed_docs.append(doc)
             except json.JSONDecodeError as e:
@@ -261,13 +263,10 @@ def generateResponse(state, llm):
         return {"answer": response[0].get("generated_text", "")}
     
 def loadDataSourceFromWeb(web_page):
-    loader = WebBaseLoader(
-        web_paths=(web_page,)
-        ),
-    )
-    unfiltered_page = loader.load()
-    readable_doc = ReadableDocument(unfiltered_page[0].page_content)
-    return Document(readable_doc.summary())
+    response = requests.get(web_page)
+    soup = BeautifulSoup(response.content, "html.parser")
+    text = soup.get_text(separator="\n", strip=True)
+    return Document(text)
    
 def updateRankingStorage(source_splits, store_persistently):
     documents_as_text = [doc.page_content for doc in source_splits]

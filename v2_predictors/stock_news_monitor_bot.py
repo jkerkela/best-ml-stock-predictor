@@ -81,7 +81,7 @@ class LLMState(TypedDict):
     
 
 def getLatestNewsItems(state: LLMState, tickers):
-    print("DEBUG: Getting latest news items")
+    print("Getting latest news items")
     try:
         state["latest_fetched_news_per_ticker"] = loadNewsObjectFromDisk()
     except: 
@@ -119,11 +119,13 @@ def getLatestNewsItems(state: LLMState, tickers):
                     "sentiment" : ("undefined", 0)
                 }
                 state["latest_fetched_news_per_ticker"][ticker] = [news_item]
+    print(f"DEBUG_KERKJO: Check news item state in getLatestNewsItems: {state["latest_fetched_news_per_ticker"]}")
     saveNewsObjectToDisk(state["latest_fetched_news_per_ticker"])
+    return state
 
 #TODO: this can be combined to postNotification agentic step
 def checkNewsItemsRelevance(state: LLMState, relevance_check_llm):
-    print("DEBUG: Filtering relevant news items")
+    print("Filtering relevant news items")
     rag_prompt = PromptTemplate.from_template(NEWS_ITEM_REVEVANCE_CHECK_PROMPT)
     for ticker in state["latest_fetched_news_per_ticker"]:
         for news_item in state["latest_fetched_news_per_ticker"][ticker]:
@@ -146,10 +148,10 @@ def checkNewsItemsRelevance(state: LLMState, relevance_check_llm):
                 else:
                     print("Warning: Unexpected response format from LLM.")
     saveNewsObjectToDisk(state["latest_fetched_news_per_ticker"])
+    return state
 
-#TODO: test with news items that should be negative
 def analyzeNewsItems(state: LLMState):
-    print("DEBUG: Analyzing news items")
+    print("Analyzing news items")
     tokenizer = AutoTokenizer.from_pretrained("ProsusAI/finbert")
     model = AutoModelForSequenceClassification.from_pretrained("ProsusAI/finbert")
     model.to(DEVICE)
@@ -173,7 +175,7 @@ def analyzeNewsItems(state: LLMState):
                 print(f'Sentiment: {sentimentFinbert}, probabilities: {probabilityFinbert}')
                 news_item["sentiment"] = (sentimentFinbert, probabilityFinbert)
                 news_item["item_status"] = ItemStatus.SENTIMENT_DONE
-    saveNewsObjectToDisk(state["latest_fetched_news_per_ticker"])
+    return state
             
 
 @tool
@@ -187,7 +189,7 @@ async def postNotification_test(message: str, telegram_api_token, notification_g
     
     """
     telegram_bot = Bot(token=telegram_api_token)
-    print("DEBUG: Executing the notification posting tool")
+    print("Executing the notification posting tool")
     await postNotification(message, telegram_bot, notification_group)
 
    
@@ -198,7 +200,7 @@ async def postNotification(message, telegram_bot, notification_group):
     for attempt in range(retries):
         try:
             await telegram_bot.send_message(chat_id=notification_group, text=message)
-            print("DEBUG: send a free slot message to notification group")
+            print("DEBUG: send a notification message to notification group")
             return True
         except Exception as e:
             if attempt < retries - 1:
@@ -209,21 +211,22 @@ async def postNotification(message, telegram_bot, notification_group):
                 return False
                   
 def isSentimentOverThreshold(sentiment, probability):
-    return (sentiment == "positive" or sentiment == "negative") and probability > SENTIMENT_THRESHOLD:
+    return (sentiment == "positive" or sentiment == "negative") and probability > SENTIMENT_THRESHOLD
       
 async def postNewsItems(state: LLMState, agent_executor, telegram_api_token, notification_group):
-    print("DEBUG: posting news items")
+    print("Posting news items")
     for ticker in state["latest_fetched_news_per_ticker"]:
         for news_item in state["latest_fetched_news_per_ticker"][ticker]:
             if news_item["item_status"] == ItemStatus.SENTIMENT_DONE:
                 if isSentimentOverThreshold(news_item["sentiment"][0], news_item["sentiment"][1]):
-                    print(f"DEBUG: Found news item with sentiment: {news_item["sentiment"][0]} and probability: {news_item["sentiment"][1]}")
+                    print(f"Found news item with sentiment: {news_item["sentiment"][0]} and probability: {news_item["sentiment"][1]}")
                     result = await agent_executor.ainvoke(
                         {"messages": [HumanMessage(content=f"Post the notification with items: message='New news item for {ticker} with {news_item["sentiment"][0]} sentiment found in: {news_item["news_url"]}', telegram_api_token={telegram_api_token}, notification_group={notification_group}. ")]}
                     )
-                    print(f"DEBUG: agent return: {result}")
+                    print(f"Agent return: {result}")
                     news_item["item_status"] = ItemStatus.POSTED
     saveNewsObjectToDisk(state["latest_fetched_news_per_ticker"])
+    return state
 
 def getNextStage(state: LLMState):
     lowest_state_found = ItemStatus.UNDEFINED
@@ -248,7 +251,7 @@ def getNextStage(state: LLMState):
 async def main(): 
     login(token=args.huggingface_api_key)
     
-    model_name = "meta-llama/Llama-3.2-1B"
+    model_name = "HuggingFaceTB/SmolLM2-1.7B-Instruct"
     llm = pipeline("text-generation",
         model=model_name, model_kwargs={"torch_dtype": "bfloat16"},
         device_map="cpu",

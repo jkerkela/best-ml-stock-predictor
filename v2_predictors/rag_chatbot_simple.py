@@ -194,7 +194,6 @@ def getCorrectionCheckedDocs(correction_check_llm, query, docs_after_re_ranking)
         response = correction_check_llm(messages.to_string(), max_new_tokens=24, do_sample=False, top_p=None, temperature=None)
         print(f'Relevance check result: {response}')
         if isinstance(response, list) and len(response) > 0:
-            print(f"DEBUG: Check query analysis answer: {response}")
             response_text = response[0].get("generated_text", "")
             try:
                 response_val = json.loads(response_text)["relevant"]
@@ -238,7 +237,6 @@ def analyzeQuery(state, llm):
         messages = query_analyze_prompt.invoke({"question": state["question"]})
         response = llm(messages.to_string(), max_new_tokens=256, temperature=0.5)
         if isinstance(response, list) and len(response) > 0:
-            print(f"DEBUG: Check query analysis answer: {response}")
             response_text = response[0].get("generated_text", "")
             try:
                 query = json.loads(response_text)
@@ -286,8 +284,7 @@ def main():
         
     login(token=args.huggingface_api_key)
     
-    #TODO: replace with more powerful LLM for accuracy e.g. meta-llama/Llama-3.2-3B-Instruct
-    model_name = "meta-llama/Llama-3.2-1B"
+    model_name = "HuggingFaceTB/SmolLM2-1.7B-Instruct"
     llm = pipeline("text-generation",
         model=model_name, model_kwargs={"torch_dtype": "bfloat16"},
         device_map="cpu",

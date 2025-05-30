@@ -152,7 +152,6 @@ def parseDataFrameFromFinancials(ticker, report_count, retrain, api_key, email):
                     compare_to_prev = True
     df_eps_surprise_data = getEPSSurpiseData(ticker, report_count - 3)
     df_final_combined_statements[EPS_DIFF_COLUMN_NAME] = df_eps_surprise_data[EPS_DIFF_COLUMN_NAME].values
-    print(f"DEBUG_KERKJO: check EPS surpise data: {df_eps_surprise_data}")
     df_final_combined_statements.fillna(0, inplace=True)
     df_only_numeric = df_final_combined_statements.apply(pd.to_numeric, errors="coerce")
     print(f"Check cleaned finalized financials data for training or prediction: {df_only_numeric}")

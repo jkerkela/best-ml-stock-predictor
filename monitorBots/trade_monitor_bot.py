@@ -19,14 +19,6 @@ from telegram import Bot
 
 from huggingface_hub import snapshot_download
 
-parser = argparse.ArgumentParser("trading_activity_monitor")
-parser.add_argument('--langsmith_api_key', required=True)
-parser.add_argument('--huggingface_api_key', required=True)
-parser.add_argument('--telegram_api_token', required=True)
-parser.add_argument('--telegram_notification_group_id', required=True)
-parser.add_argument('--source_url_for_trades', required=True, help='data source is appended shall be URL that contains trade information on html GET request')
-args = parser.parse_args()
-
 JSON_TRADE_DATE_KEY = "DATE"
 JSON_COMPANY_SYMBOL = "SYMBOL"
 JSON_TRADE_SIZE= "SIZE"
@@ -62,6 +54,7 @@ def loadTradeObjectFromDisk(file_prefix=DISK_FILE_PREFIX_NAME_OF_LATEST_TRADE):
         return pickle.load(f)
         
 def loadDataSourceFromWeb(web_page):
+    print("Loading latest trade info")
     response = requests.get(web_page)
     html_content = response.content
     soup = BeautifulSoup(html_content, "html.parser")
@@ -69,11 +62,11 @@ def loadDataSourceFromWeb(web_page):
     return Document(text)
     
 def queryLatestTradeAsJson(llm, data):
+    print("Querying latest stock trade from LLM")
     splitter = RecursiveCharacterTextSplitter(chunk_size=2000, chunk_overlap=0)
     split_docs = splitter.split_documents([data])
     prompt = PromptTemplate.from_template(PROMPT)
     for doc in split_docs:
-        print(f"DEBUG: {doc}")
         messages = prompt.invoke({"context": doc.page_content})
         response = llm(messages.to_string(), max_new_tokens=50, do_sample=False, top_p=None, temperature=None)
         if isinstance(response, list) and len(response) > 0:
@@ -100,17 +93,13 @@ async def postNotification(message, telegram_bot, notification_group, source_url
         except Exception as e:
             if attempt < retries - 1:
                 print(f"DEBUG: message send attempt failed with error: {e}, retrying...")
-                await asyncio.sleep(5)  # Wait 5 seconds before retrying
+                await asyncio.sleep(5)
             else:
                 print(f"DEBUG: message send attempt failed with error: {e}, retry attemps exceeded")
                 return False
     
-async def main():
-    if not os.environ.get("LANGSMITH_API_KEY"):
-        os.environ["LANGSMITH_API_KEY"] = args.langsmith_api_key
-    login(token=args.huggingface_api_key)
-    
-    source_data = loadDataSourceFromWeb(args.source_url_for_trades)
+async def main(args):
+    print("Running stock trades monitor")
     model_name = "HuggingFaceTB/SmolLM2-1.7B-Instruct"
     llm = pipeline("text-generation",
         model=model_name, model_kwargs={"torch_dtype": "bfloat16"},
@@ -119,25 +108,38 @@ async def main():
     )
     telegram_bot = Bot(token=args.telegram_api_token)
     
-    latest_trade = queryLatestTradeAsJson(llm, source_data)
-    
-    latest_saved_trade = None
-    parsed_url = urlparse(args.source_url_for_trades)
-    last_url_segment = parsed_url.path.rstrip('/').split('/')[-1]
-    try:
-        latest_saved_trade = loadTradeObjectFromDisk(last_url_segment)
-    except: 
-        pass
-    do_post_latest_trade = True if not latest_trade == latest_saved_trade else False
-    if do_post_latest_trade:
-        if await postNotification(latest_trade, telegram_bot, args.telegram_notification_group_id, args.source_url_for_trades):
-            saveTradeObjectToDisk(latest_trade, last_url_segment)
+    while True:
+        source_data = loadDataSourceFromWeb(args.source_url_for_trades)
+        latest_trade = queryLatestTradeAsJson(llm, source_data)
+        
+        latest_saved_trade = None
+        parsed_url = urlparse(args.source_url_for_trades)
+        last_url_segment = parsed_url.path.rstrip('/').split('/')[-1]
+        try:
+            latest_saved_trade = loadTradeObjectFromDisk(last_url_segment)
+        except: 
+            pass
+        do_post_latest_trade = True if not latest_trade == latest_saved_trade else False
+        if do_post_latest_trade:
+            if await postNotification(latest_trade, telegram_bot, args.telegram_notification_group_id, args.source_url_for_trades):
+                saveTradeObjectToDisk(latest_trade, last_url_segment)
+        else:
+            print("Latest trade already posted, skipping posting")
+        if args.single_run:
+            break
+        time.sleep(600)
 
     
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser("trading_activity_monitor")
+    parser.add_argument('--huggingface_api_key', required=True)
+    parser.add_argument('--telegram_api_token', required=True)
+    parser.add_argument('--telegram_notification_group_id', required=True)
+    parser.add_argument('--source_url_for_trades', required=True, help='data source shall be URL that contains trade information on html GET request')
+    parser.add_argument('--single_run', dest='single_run',
+        help='Set to run monitoring only once, if not set the monitoring will be run in loop in 10 min intervals', default=False, action=argparse.BooleanOptionalAction)
+    args = parser.parse_args()
     try:
-        while True:
-            asyncio.run(main())
-            time.sleep(600)
+        asyncio.run(main(args))
     except KeyboardInterrupt:
         pass

@@ -25,13 +25,6 @@ from huggingface_hub import login
 from telegram import Bot
 
 
-parser = argparse.ArgumentParser("stock_predict")
-parser.add_argument('--huggingface_api_key', required=True)
-parser.add_argument('--telegram_api_token', required=True)
-parser.add_argument('--telegram_notification_group_id', required=True)
-parser.add_argument('--tickers', nargs='+', required=True, help='The tickers to monitor')
-args = parser.parse_args()
-
 NEWS_ITEMS_TO_FETCH_PER_TICKER = 1
 SCRAPING_SOURCE_BASE_URL = "https://www.stocktitan.net"
 SCRAPING_SOURCE_NEWS_URL = SCRAPING_SOURCE_BASE_URL + "/news/"
@@ -119,7 +112,6 @@ def getLatestNewsItems(state: LLMState, tickers):
                     "sentiment" : ("undefined", 0)
                 }
                 state["latest_fetched_news_per_ticker"][ticker] = [news_item]
-    print(f"DEBUG_KERKJO: Check news item state in getLatestNewsItems: {state["latest_fetched_news_per_ticker"]}")
     saveNewsObjectToDisk(state["latest_fetched_news_per_ticker"])
     return state
 
@@ -205,7 +197,7 @@ async def postNotification(message, telegram_bot, notification_group):
         except Exception as e:
             if attempt < retries - 1:
                 print(f"DEBUG: message send attempt failed with error: {e}, retrying...")
-                await asyncio.sleep(5)  # Wait 5 seconds before retrying
+                await asyncio.sleep(5)
             else:
                 print(f"DEBUG: message send attempt failed with error: {e}, retry attemps exceeded")
                 return False
@@ -241,14 +233,17 @@ def getNextStage(state: LLMState):
     elif lowest_state_found == ItemStatus.SENTIMENT_DONE:
         return {"next_stage": "postNewsItems"}
     elif lowest_state_found == ItemStatus.POSTED:
+        print("No new news items found to post")
         return {"next_stage": END}
     elif lowest_state_found == ItemStatus.IGNORE:
+        print("No new news items found to post")
         return {"next_stage": END}
     else:
         return {"next_stage": "getLatestNewsItems"}
 
         
-async def main(): 
+async def main(args):
+    print("Running stock news monitor")
     login(token=args.huggingface_api_key)
     
     model_name = "HuggingFaceTB/SmolLM2-1.7B-Instruct"
@@ -289,10 +284,20 @@ async def main():
     while True:
         result = await graph.ainvoke({ "latest_fetched_news_per_ticker": {}})
         print(result)
-        time.sleep(60)
+        if args.single_run:
+            break
+        time.sleep(600)
 
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser("stock_news_monitor")
+    parser.add_argument('--huggingface_api_key', required=True)
+    parser.add_argument('--telegram_api_token', required=True)
+    parser.add_argument('--telegram_notification_group_id', required=True)
+    parser.add_argument('--single_run', dest='single_run',
+        help='Set to run monitoring only once, if not set the monitoring will be run in loop in 10 min intervals', default=False, action=argparse.BooleanOptionalAction)
+    parser.add_argument('--tickers', nargs='+', required=True, help='The tickers to monitor')
+    args = parser.parse_args()
     try:
-        asyncio.run(main())
+        asyncio.run(main(args))
     except KeyboardInterrupt:
         pass

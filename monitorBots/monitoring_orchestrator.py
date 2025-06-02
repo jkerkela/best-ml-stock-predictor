@@ -7,11 +7,12 @@ import pytz
 import stock_movers_monitor_bot
 import stock_news_monitor_bot
 import trade_monitor_bot
+import eps_monitor_bot
 
 STOCK_MOVERS_POST_INTERVAL_IN_SECONDS = 900
 STOCK_NEWS_POST_INTERVAL_IN_SECONDS = 900
 STOCK_TRADE_MONITOR_POST_INTERVAL_IN_SECONDS = 900
-
+EPS_CHECK_INTERVAL = 5400
 parser = argparse.ArgumentParser("stock_movers_monitor")
 parser.add_argument('--telegram_api_token', required=True)
 parser.add_argument('--telegram_notification_group_id', required=True)
@@ -40,6 +41,7 @@ async def main():
     time_on_last_premarket_movers_post = -1
     time_on_last_news_post = -1
     time_on_last_trade_monitor_post = -1
+    time_on_last_EPS_monitor_post = -1
     while True:
         print("Checking if monitoring bots need to run")
         if is_weekday():
@@ -53,10 +55,13 @@ async def main():
                 args.mode = "market"
                 await stock_movers_monitor_bot.main(args)
                 time_on_last_stock_movers_post = time.time()
-            elif shouldPost(time_on_last_stock_movers_post, STOCK_MOVERS_POST_INTERVAL_IN_SECONDS) and isNowInTimePeriod(dt_time(23, 00, 0), dt_time(24, 0, 0), current_time):
+            elif shouldPost(time_on_last_stock_movers_post, STOCK_MOVERS_POST_INTERVAL_IN_SECONDS) and isNowInTimePeriod(dt_time(23, 0, 0), dt_time(24, 0, 0), current_time):
                 args.mode = "postmarket"
                 await stock_movers_monitor_bot.main(args)
                 time_on_last_stock_movers_post = time.time()
+            if shouldPost(time_on_last_EPS_monitor_post, EPS_CHECK_INTERVAL) and (isNowInTimePeriod(dt_time(13, 30, 0), dt_time(15, 30, 0), current_time or isNowInTimePeriod(dt_time(23, 0, 0), dt_time(1, 0, 0), current_time)):
+                await eps_monitor_bot.main(args)
+                time_on_last_EPS_monitor_post = time.time()
             
         
         if shouldPost(time_on_last_news_post, STOCK_NEWS_POST_INTERVAL_IN_SECONDS):

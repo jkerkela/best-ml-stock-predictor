@@ -100,7 +100,7 @@ def getDataFrameWithOnlyRelevantColumns(dataframe, earnings_date, earnings_date_
            
 def getEPSSurpiseData(ticker, number_of_quarters):
     stock = yf.Ticker(ticker)
-    return stock.get_earnings_dates(limit=(number_of_quarters + EMPTY_ROWS_IN_DEFAULT_EPS_REPORT)).dropna()
+    return stock.get_earnings_dates(limit=(number_of_quarters + EMPTY_ROWS_IN_DEFAULT_EPS_REPORT)).iloc[EMPTY_ROWS_IN_DEFAULT_EPS_REPORT:].fillna(0)
     
 def parseDataFrameFromFinancials(ticker, report_count, retrain, api_key, email):
     set_identity(email)
@@ -108,54 +108,59 @@ def parseDataFrameFromFinancials(ticker, report_count, retrain, api_key, email):
     df_final_combined_statements = pd.DataFrame()
     filings = company.get_filings()
     financials_filings = filings.filter(form=['10-K', '10-Q'])
-    for i in range(report_count):
-        if ((i + 4) <= report_count):
-            financials_obj_current = financials_filings[i].data_object()
-            financials_obj_to_compare_to = financials_filings[i + 4].data_object()
-            prev_df_combined_statements = None
-            compare_to_prev = False
-            price_change = None
-            for financials_obj in [financials_obj_current, financials_obj_to_compare_to]:
-                df_income_statement_raw = financials_obj.income_statement.to_dataframe()
-                latest_earnings_date_column_raw_name = df_income_statement_raw.columns[2]
-                latest_earnings_date_column_sanitized_name = latest_earnings_date_column_raw_name.split(" ", 1)[0] # In 10-Q income and cash flow reports, the column name contains quarter postfix e.g. "2025-03-31 Q1"  
-                actual_earnings_release_date = financials_obj.filing_date
-                df_income_statement = getDataFrameWithOnlyRelevantColumns(df_income_statement_raw, latest_earnings_date_column_sanitized_name, latest_earnings_date_column_raw_name)
-                #NOTE: including the balance sheet and cash flow statement to data set will cause noise and importantance of features such as us-gaap_EarningsPerShareBasic is "lost"
-                #df_balance_sheet = getDataFrameWithOnlyRelevantColumns(financials_obj.balance_sheet.to_dataframe(), latest_earnings_date_column_sanitized_name, latest_earnings_date_column_raw_name)
-                #df_cash_flow_statement = getDataFrameWithOnlyRelevantColumns(financials_obj.cash_flow_statement.to_dataframe(), latest_earnings_date_column_sanitized_name, latest_earnings_date_column_raw_name)
-             
-                df_quarterly_financials_combined = pd.concat([df_income_statement])
-                
-                # transpose data frame to have data "features" as columns, set concept as label column as concept contains items as us-gaap_ProfitLoss, us-gaap_NetIncomeLoss.., 
-                # add suffix to duplicate columns
-                df_quarterly_financials_combined = df_quarterly_financials_combined.transpose()
-                df_quarterly_financials_combined.columns = df_quarterly_financials_combined.iloc[0]
-                new_columns = pd.Series(df_quarterly_financials_combined.columns).groupby(df_quarterly_financials_combined.columns).cumcount().astype(str)
-                df_quarterly_financials_combined.columns = [f"{col}_{suffix}" if suffix != "0" else col for col, suffix in zip(df_quarterly_financials_combined.columns, new_columns)]
-                # calculate the diff of latest report financials and previous report financials
-                df_quarterly_financials_combined = df_quarterly_financials_combined.apply(pd.to_numeric, errors="coerce")
+    if len(financials_filings) > report_count:
+        for i in range(report_count):
+            if ((i + 4) <= report_count):
+                financials_obj_current = financials_filings[i].data_object()
+                financials_obj_to_compare_to = financials_filings[i + 4].data_object()
+                prev_df_combined_statements = None
+                compare_to_prev = False
+                price_change = None
+                for financials_obj in [financials_obj_current, financials_obj_to_compare_to]:
+                    df_income_statement_raw = financials_obj.income_statement.to_dataframe()
+                    latest_earnings_date_column_raw_name = df_income_statement_raw.columns[2]
+                    latest_earnings_date_column_sanitized_name = latest_earnings_date_column_raw_name.split(" ", 1)[0] # In 10-Q income and cash flow reports, the column name contains quarter postfix e.g. "2025-03-31 Q1"  
+                    actual_earnings_release_date = financials_obj.filing_date
+                    df_income_statement = getDataFrameWithOnlyRelevantColumns(df_income_statement_raw, latest_earnings_date_column_sanitized_name, latest_earnings_date_column_raw_name)
+                    #NOTE: including the balance sheet and cash flow statement to data set will cause noise and importantance of features such as us-gaap_EarningsPerShareBasic is "lost"
+                    #df_balance_sheet = getDataFrameWithOnlyRelevantColumns(financials_obj.balance_sheet.to_dataframe(), latest_earnings_date_column_sanitized_name, latest_earnings_date_column_raw_name)
+                    #df_cash_flow_statement = getDataFrameWithOnlyRelevantColumns(financials_obj.cash_flow_statement.to_dataframe(), latest_earnings_date_column_sanitized_name, latest_earnings_date_column_raw_name)
+                 
+                    df_quarterly_financials_combined = pd.concat([df_income_statement])
+                    
+                    # transpose data frame to have data "features" as columns, set concept as label column as concept contains items as us-gaap_ProfitLoss, us-gaap_NetIncomeLoss.., 
+                    # add suffix to duplicate columns
+                    df_quarterly_financials_combined = df_quarterly_financials_combined.transpose()
+                    df_quarterly_financials_combined.columns = df_quarterly_financials_combined.iloc[0]
+                    new_columns = pd.Series(df_quarterly_financials_combined.columns).groupby(df_quarterly_financials_combined.columns).cumcount().astype(str)
+                    df_quarterly_financials_combined.columns = [f"{col}_{suffix}" if suffix != "0" else col for col, suffix in zip(df_quarterly_financials_combined.columns, new_columns)]
+                    # calculate the diff of latest report financials and previous report financials
+                    df_quarterly_financials_combined = df_quarterly_financials_combined.apply(pd.to_numeric, errors="coerce")
 
-                if retrain and not compare_to_prev: # we only fetch price change if we are retraining with historical data, in case of prediction, we won't have price data available
-                    price_change = getPriceChangeOnReportDay(args.ticker, actual_earnings_release_date, api_key)
-                # Add row of comparing YoY financials to final dataframe. 
-                # Keep only the row with numeric results diff, replace NAN values with 0
-                if compare_to_prev:
-                    df_diffed_financials = pd.DataFrame(prev_df_combined_statements.iloc[1] - df_quarterly_financials_combined.iloc[1]).transpose()
-                    if retrain:
-                        df_diffed_financials[STOCK_PRICE_CHANGE_IN_PERCENTS_ON_REPORT_DAY_COLUMN] = price_change
-                    df_final_combined_statements = pd.concat([df_final_combined_statements, df_diffed_financials], ignore_index=True)
-                else:
-                    prev_df_combined_statements = df_quarterly_financials_combined
-                    global EARNINGS_REPORT_DATE
-                    EARNINGS_REPORT_DATE = actual_earnings_release_date
-                    compare_to_prev = True
-    df_eps_surprise_data = getEPSSurpiseData(ticker, report_count - 3)
-    df_final_combined_statements[EPS_DIFF_COLUMN_NAME] = df_eps_surprise_data[EPS_DIFF_COLUMN_NAME].values
-    df_final_combined_statements.fillna(0, inplace=True)
-    df_only_numeric = df_final_combined_statements.apply(pd.to_numeric, errors="coerce")
-    print(f"Check cleaned finalized financials data for training or prediction: {df_only_numeric}")
-    return df_only_numeric
+                    if retrain and not compare_to_prev: # we only fetch price change if we are retraining with historical data, in case of prediction, we won't have price data available
+                        price_change = getPriceChangeOnReportDay(args.ticker, actual_earnings_release_date, api_key)
+                    # Add row of comparing YoY financials to final dataframe. 
+                    # Keep only the row with numeric results diff, replace NAN values with 0
+                    if compare_to_prev:
+                        df_diffed_financials = pd.DataFrame(prev_df_combined_statements.iloc[1] - df_quarterly_financials_combined.iloc[1]).transpose()
+                        if retrain:
+                            df_diffed_financials[STOCK_PRICE_CHANGE_IN_PERCENTS_ON_REPORT_DAY_COLUMN] = price_change
+                        df_final_combined_statements = pd.concat([df_final_combined_statements, df_diffed_financials], ignore_index=True)
+                    else:
+                        prev_df_combined_statements = df_quarterly_financials_combined
+                        global EARNINGS_REPORT_DATE
+                        EARNINGS_REPORT_DATE = actual_earnings_release_date
+                        compare_to_prev = True
+        df_eps_surprise_data = getEPSSurpiseData(ticker, report_count - 3)
+        print(f"DEBUG_KERKJO: Check df_final_combined_statements shape: {df_final_combined_statements.shape}, check df_eps_surprise_data shape: {df_eps_surprise_data.shape}")
+        df_final_combined_statements[EPS_DIFF_COLUMN_NAME] = df_eps_surprise_data[EPS_DIFF_COLUMN_NAME].values
+        df_final_combined_statements.fillna(0, inplace=True)
+        df_only_numeric = df_final_combined_statements.apply(pd.to_numeric, errors="coerce")
+        print(f"Check cleaned finalized financials data for training or prediction: {df_only_numeric}")
+        return df_only_numeric
+    else:
+        print(f"Didn't find enough financial filings for {ticker}. Needed {report_count} filings, found {len(financials_filings)} filings.")
+    return pd.DataFrame()
     
 def getFinancialsDataOnlyNumeric(email, ticker, retrain, api_key):
     if retrain:
@@ -206,14 +211,16 @@ def main():
 
     if args.run_financials_analysis or args.retrain_financials_analysis:
         api_key = '' if not args.api_key else args.api_key
-        df_combined_financials_only_numeric_data = None
+        df_combined_financials_only_numeric_data = pd.DataFrame()
         if args.load_saved_traning_data:
             df_combined_financials_only_numeric_data = pd.read_csv(f"{args.ticker}_traning_data.csv")
         else:
             df_combined_financials_only_numeric_data = getFinancialsDataOnlyNumeric(args.email, args.ticker, args.retrain_financials_analysis, api_key)
-            if args.save_training_data_to_file:
+            if not df_combined_financials_only_numeric_data.empty and args.save_training_data_to_file:
                 df_combined_financials_only_numeric_data.to_csv(f"{args.ticker}_traning_data.csv", index=False)
-                
+        if df_combined_financials_only_numeric_data.empty:
+            print(f"Unable to get traning data for {args.ticker}")
+            return
         model = None
         if args.retrain_financials_analysis:
             X = df_combined_financials_only_numeric_data.iloc[:, :-1] # features, all columns except the price change column

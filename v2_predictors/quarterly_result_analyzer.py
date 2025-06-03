@@ -223,6 +223,9 @@ def main():
             return
         model = None
         if args.retrain_financials_analysis:
+            columns = list(df_combined_financials_only_numeric_data.columns)
+            columns[-2], columns[-1] = columns[-1], columns[-2]
+            df_combined_financials_only_numeric_data = df_combined_financials_only_numeric_data[columns]
             X = df_combined_financials_only_numeric_data.iloc[:, :-1] # features, all columns except the price change column
             y = df_combined_financials_only_numeric_data.iloc[:, -1] # target column
 
@@ -230,11 +233,11 @@ def main():
                 'objective': 'regression',
                 'boosting_type': 'gbdt',
                 'metric': 'rmse',
-                'num_leaves': 3,
-                'max_depth': 3,
-                'learning_rate': 0.25,
-                'n_estimators': 50,
-                'min_child_samples': 2,
+                'num_leaves': 2,
+                'max_depth': 2,
+                'learning_rate': 0.03,
+                'n_estimators': 100,
+                'min_child_samples': 1,
                 'reg_alpha': 0.5,
                 'reg_lambda': 0.5,
                 'subsample': 0.8,

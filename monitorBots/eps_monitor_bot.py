@@ -1,7 +1,10 @@
 import time
-from typing import TypedDict
 import argparse
 import asyncio
+from enum import Enum
+from typing import TypedDict
+
+import pickle
 
 from bs4 import BeautifulSoup
 
@@ -23,7 +26,7 @@ SHADOW_ROOT_INSIDE_TABLE_PARENT_TRIGGER = "return arguments[0].shadowRoot.innerH
 EPS_ITEM_ELEMENT = "table-row"
 EPS_ITEM_COMPANY_DETAIL_ELEMENT = "table-cell fixed-column-size- text-align-left"
 EPS_ITEM_EPS_DETAIL_ELEMENT = "table-cell fixed-column-size- text-align-left"
-
+EPS_OBJECT_DISK_FILE_POSTFIX = "EPS_object"
 EPS_ITEMS_TO_FETCH = 5
 EPS_SURPRISE_THRESHOLD = 30
 
@@ -32,6 +35,15 @@ class EPSItem(TypedDict):
     company_symbol: str
     eps_surprise_percent: float
 
+
+def saveEPSObjectToDisk(object_, file_prefix):
+    with open(file_prefix + ".pkl", "wb") as f:
+        pickle.dump(object_, f)
+        
+def loadEPSObjectFromDisk(file_prefix):    
+    with open(file_prefix + ".pkl", "rb") as f:
+        return pickle.load(f)
+        
 def parseEPSDataFrom(web_page):
     print("Loading latest trade info")
     chrome_options = Options()
@@ -62,12 +74,12 @@ def parseEPSDataFrom(web_page):
         for elem in EPS_entries:
             company_details_elems = elem.find_all("div", class_=EPS_ITEM_COMPANY_DETAIL_ELEMENT)
             eps_surprise_percent_elem = elem.find_all("div", class_=EPS_ITEM_EPS_DETAIL_ELEMENT)[-1]
-            eps_surprise = float(eps_surprise_percent_elem.text.replace("\n", "").strip()
+            eps_surprise = float(eps_surprise_percent_elem.text.replace("\n", "").strip())
             if eps_surprise > EPS_SURPRISE_THRESHOLD:
                 result: EPSItem = {
                     "company_name": company_details_elems[1].text.replace("\n", ""),
                     "company_symbol": company_details_elems[0].text.replace("\n", ""),
-                    "eps_surprise_percent": eps_surprise)
+                    "eps_surprise_percent": eps_surprise
                 }
                 results.append(result)
     except Exception as e:
@@ -93,9 +105,16 @@ async def postNotification(message, telegram_bot, notification_group):
 async def main(args):
     telegram_bot = Bot(token=args.telegram_api_token)
     eps_items_list = parseEPSDataFrom(URL)
-    for item in eps_items_list:
-        message = f"Found company: {item["company_name"]} ({item["company_symbol"]}) with EPS surprise of {item["eps_surprise_percent"]}%"
-        await postNotification(message, telegram_bot, args.telegram_notification_group_id)
+    for index, item in enumerate(eps_items_list):
+        previously_stored_eps_object = None
+        try:
+            previously_stored_eps_object = loadEPSObjectFromDisk(f"{index}_EPS_OBJECT_DISK_FILE_POSTFIX")
+        except: 
+            pass
+        if not previously_stored_eps_object == item:
+            message = f"Found company: {item["company_name"]} ({item["company_symbol"]}) with EPS surprise of {item["eps_surprise_percent"]}%"
+            await postNotification(message, telegram_bot, args.telegram_notification_group_id)
+            saveEPSObjectToDisk(item, f"{index}_EPS_OBJECT_DISK_FILE_POSTFIX")
     
 
 if __name__ == "__main__":

@@ -16,7 +16,6 @@ import lightgbm as lgb
 import pickle
 
 from edgar import *
-from tiingo import TiingoClient
 import yfinance as yf
 
 STOCK_PRICE_CHANGE_IN_PERCENTS_ON_REPORT_DAY_COLUMN = "price_change_in_percent"
@@ -87,13 +86,13 @@ def getPriceChangeOnReportDay(ticker, report_date_str, api_key):
 # report date e.g. "2025-03-31": which contains reported values for the period,
 # In 10-Q income and cash flow reports, the column name contains quarter postfix e.g. "2025-03-31 Q1",
 # within this function we wil rename it to date without quarter postfix i.e. to format like e.g. "2025-03-31"
-def getDataFrameWithOnlyRelevantColumns(dataframe, earnings_date, earnings_date_with_postfix):
+def getDataFrameWithOnlyLatestData(dataframe, earnings_date, earnings_date_with_postfix):
     try:
-        return dataframe[[FINANCIALS_REPORT_LABEL_COLUMN, earnings_date]]
+        df_with_relevant_columns = dataframe[[FINANCIALS_REPORT_ORIGINAL_LABEL_COLUMN, earnings_date_with_postfix]]
+        return df_with_relevant_columns.rename(columns={earnings_date_with_postfix: earnings_date})
     except:
         try:
-            df_with_relevant_columns = dataframe[[FINANCIALS_REPORT_LABEL_COLUMN, earnings_date_with_postfix]]
-            return df_with_relevant_columns.rename(columns={earnings_date_with_postfix: earnings_date})
+            return dataframe[[FINANCIALS_REPORT_ORIGINAL_LABEL_COLUMN, earnings_date]]
         except:
             print(f"Failed to find correct earnings date {earnings_date} on dataframe, returning empty dataframe")
             return pd.DataFrame()
@@ -152,7 +151,6 @@ def parseDataFrameFromFinancials(ticker, report_count, retrain, api_key, email):
                         EARNINGS_REPORT_DATE = actual_earnings_release_date
                         compare_to_prev = True
         df_eps_surprise_data = getEPSSurpiseData(ticker, report_count - 3)
-        print(f"DEBUG_KERKJO: Check df_final_combined_statements shape: {df_final_combined_statements.shape}, check df_eps_surprise_data shape: {df_eps_surprise_data.shape}")
         df_final_combined_statements[EPS_DIFF_COLUMN_NAME] = df_eps_surprise_data[EPS_DIFF_COLUMN_NAME].values
         df_final_combined_statements.fillna(0, inplace=True)
         df_only_numeric = df_final_combined_statements.apply(pd.to_numeric, errors="coerce")

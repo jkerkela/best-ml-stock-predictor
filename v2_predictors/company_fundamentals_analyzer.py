@@ -8,11 +8,17 @@ import matplotlib.pyplot as plt
 from edgar import *
 import yfinance as yf
 
+import numpy as np
+from sklearn.model_selection import LeaveOneOut, cross_val_score
+from sklearn.metrics import mean_absolute_error
+from xgboost import XGBRegressor
+
+import optuna
+
 
 parser = argparse.ArgumentParser("company_fundamentals_analysis")
 parser.add_argument('--email', required=True, help='User email address for accessing Edgar data for financials analysis')
 parser.add_argument('--ticker', required=True, help='Stock ticker to analyze')
-parser.add_argument('--load_saved_data', dest='load_saved_data', default=False, action=argparse.BooleanOptionalAction)
 parser.add_argument('--save_data_to_disk', dest='save_data_to_disk', default=True, action=argparse.BooleanOptionalAction)
 parser.add_argument('--load_data_from_disk', dest='load_data_from_disk', default=False, action=argparse.BooleanOptionalAction)
 args = parser.parse_args()
@@ -225,6 +231,59 @@ def chartCompanyFundamentals(dataframe):
         plt.grid()
         plt.savefig(f"{col}_plot.png", dpi=300, bbox_inches='tight')
         plt.close()
+        
+        
+
+def objective(trial, X, y):
+    params = {
+        'learning_rate': trial.suggest_float('learning_rate', 0.01, 0.1),
+        'n_estimators': trial.suggest_int('n_estimators', 50, 200),
+        'max_depth': trial.suggest_int('max_depth', 3, 10),
+        'subsample': trial.suggest_float('subsample', 0.6, 1.0),
+        'colsample_bytree': trial.suggest_float('colsample_bytree', 0.6, 1.0),
+        'reg_alpha': trial.suggest_float('reg_alpha', 0, 0.5),
+        'reg_lambda': trial.suggest_float('reg_lambda', 0.5, 2)
+    }
+    
+    model = XGBRegressor(objective="reg:squarederror", **params)
+    score = cross_val_score(model, X, y, scoring='neg_mean_absolute_error', cv=5, n_jobs=-1)
+    return score.mean()
+    
+def evaluateParams(dataframe):
+    X = dataframe.drop(columns=[STOCK_PRICE_COLUMN])
+    y = dataframe[STOCK_PRICE_COLUMN] 
+    study = optuna.create_study(direction="maximize")
+    study.optimize(lambda trial: objective(trial, X, y), n_trials=50)
+    print("Best Parameters:", study.best_params)
+    return study.best_params
+    
+def trainModel(dataframe, params): 
+    loo = LeaveOneOut()
+    X = dataframe.drop(columns=[STOCK_PRICE_COLUMN])
+    y = dataframe[STOCK_PRICE_COLUMN] 
+    feature_importance_list = []
+    cv_scores = []
+    
+    params['objective'] = "reg:squarederror"
+    for train_idx, test_idx in loo.split(X):
+        X_train, X_test = X.iloc[train_idx], X.iloc[test_idx]
+        y_train, y_test = y.iloc[train_idx], y.iloc[test_idx]
+        model = XGBRegressor(**params)
+        model.fit(X_train, y_train)
+        feature_importance_list.append(model.get_booster().get_score(importance_type="gain"))
+        y_pred = model.predict(X_test)
+        cv_scores.append(mean_absolute_error(y_test, y_pred))
+
+    avg_importance = {}
+    for importance_dict in feature_importance_list:
+        for feature, value in importance_dict.items():
+            avg_importance[feature] = avg_importance.get(feature, 0) + value
+    for feature in avg_importance:
+        avg_importance[feature] /= len(feature_importance_list)
+    avg_cv_score = np.mean(cv_scores)
+
+    print("Average Feature Importance Across LOOCV:", avg_importance)
+    print(f"Average Cross-Validation Score (MAE): {avg_cv_score}")
 
 def main():
     df_company_fundamentals = pd.DataFrame()
@@ -235,6 +294,9 @@ def main():
         if args.save_data_to_disk:
             saveDataToDisk(df_company_fundamentals, args.ticker)
     chartCompanyFundamentals(df_company_fundamentals)
+    
+    params = evaluateParams(df_company_fundamentals)
+    trainModel(df_company_fundamentals, params)
 
 if __name__ == "__main__":
     main()

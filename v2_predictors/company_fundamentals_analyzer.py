@@ -1,5 +1,6 @@
 import argparse
 from enum import Enum
+from datetime import datetime
 
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -60,6 +61,14 @@ class DocumentType(Enum):
     INCOME_STATEMENT = 1
     BALANCE_SHEET = 2
     CASHFLOW_STATEMENT = 3
+    
+def is_datetime(string, format="%Y-%m-%d"):
+    try:
+        datetime.strptime(string, format)
+        return True
+    except ValueError:
+        print(f"DEBUG: invalid format date time string: {string}")
+        return False
 
 # Get dataframe with columns:
 # "concept": which contains "label" values like us-gaap_ProfitLoss, us-gaap_NetIncomeLoss
@@ -170,30 +179,32 @@ def fetchCompanyFundamentals(email, ticker, report_count=FIVE_YEARS_OF_REPORTS):
         df_income_statement_raw = financials_obj.income_statement.to_dataframe()
         latest_earnings_date_column_raw_name = df_income_statement_raw.columns[2]
         latest_earnings_date_column_sanitized_name = latest_earnings_date_column_raw_name.split(" ", 1)[0] # In 10-Q income and cash flow reports, the column name contains quarter postfix e.g. "2025-03-31 Q1"  
-        share_price = getSharePrice(ticker, latest_earnings_date_column_sanitized_name)
-        df_income_statement = getDataFrameWithOnlyLatestData(df_income_statement_raw, latest_earnings_date_column_sanitized_name, latest_earnings_date_column_raw_name)
-        if not df_income_statement.empty:
-            df_income_statement = getWithTransformFeaturesToColumns(df_income_statement)
-            df_income_statement = getWithNeededColumnsCalculated(df_income_statement, DocumentType.INCOME_STATEMENT, share_price)
-            df_income_statement = getWithUnnecessaryColumnsFiltered(df_income_statement, DocumentType.INCOME_STATEMENT)
-        
-        df_balance_sheet_raw = financials_obj.balance_sheet.to_dataframe()
-        df_balance_sheet = getDataFrameWithOnlyLatestData(df_balance_sheet_raw, latest_earnings_date_column_sanitized_name, latest_earnings_date_column_raw_name)
-        if not df_balance_sheet.empty:
-            df_balance_sheet = getWithTransformFeaturesToColumns(df_balance_sheet)
-            df_balance_sheet = getWithNeededColumnsCalculated(df_balance_sheet, DocumentType.BALANCE_SHEET)
-            df_balance_sheet = getWithUnnecessaryColumnsFiltered(df_balance_sheet, DocumentType.BALANCE_SHEET)
-        
-        df_cashflow_statement_raw = financials_obj.cash_flow_statement.to_dataframe()
-        df_cashflow_statement = getDataFrameWithOnlyLatestData(df_cashflow_statement_raw, latest_earnings_date_column_sanitized_name, latest_earnings_date_column_raw_name)
-        if not df_cashflow_statement.empty:
-            df_cashflow_statement = getWithTransformFeaturesToColumns(df_cashflow_statement)
-            df_cashflow_statement = getWithNeededColumnsCalculated(df_cashflow_statement, DocumentType.CASHFLOW_STATEMENT)
-            df_cashflow_statement = getWithUnnecessaryColumnsFiltered(df_cashflow_statement, DocumentType.CASHFLOW_STATEMENT)
+        if is_datetime(latest_earnings_date_column_sanitized_name):
+            print(f"Check latest_earnings_date_column_sanitized_name {latest_earnings_date_column_sanitized_name} ")
+            share_price = getSharePrice(ticker, latest_earnings_date_column_sanitized_name)
+            df_income_statement = getDataFrameWithOnlyLatestData(df_income_statement_raw, latest_earnings_date_column_sanitized_name, latest_earnings_date_column_raw_name)
+            if not df_income_statement.empty:
+                df_income_statement = getWithTransformFeaturesToColumns(df_income_statement)
+                df_income_statement = getWithNeededColumnsCalculated(df_income_statement, DocumentType.INCOME_STATEMENT, share_price)
+                df_income_statement = getWithUnnecessaryColumnsFiltered(df_income_statement, DocumentType.INCOME_STATEMENT)
+            
+            df_balance_sheet_raw = financials_obj.balance_sheet.to_dataframe()
+            df_balance_sheet = getDataFrameWithOnlyLatestData(df_balance_sheet_raw, latest_earnings_date_column_sanitized_name, latest_earnings_date_column_raw_name)
+            if not df_balance_sheet.empty:
+                df_balance_sheet = getWithTransformFeaturesToColumns(df_balance_sheet)
+                df_balance_sheet = getWithNeededColumnsCalculated(df_balance_sheet, DocumentType.BALANCE_SHEET)
+                df_balance_sheet = getWithUnnecessaryColumnsFiltered(df_balance_sheet, DocumentType.BALANCE_SHEET)
+            
+            df_cashflow_statement_raw = financials_obj.cash_flow_statement.to_dataframe()
+            df_cashflow_statement = getDataFrameWithOnlyLatestData(df_cashflow_statement_raw, latest_earnings_date_column_sanitized_name, latest_earnings_date_column_raw_name)
+            if not df_cashflow_statement.empty:
+                df_cashflow_statement = getWithTransformFeaturesToColumns(df_cashflow_statement)
+                df_cashflow_statement = getWithNeededColumnsCalculated(df_cashflow_statement, DocumentType.CASHFLOW_STATEMENT)
+                df_cashflow_statement = getWithUnnecessaryColumnsFiltered(df_cashflow_statement, DocumentType.CASHFLOW_STATEMENT)
 
-        df_statements_combined = pd.concat([df_income_statement, df_balance_sheet, df_cashflow_statement], axis=1)
-        
-        df_final_combined_statements = pd.concat([df_final_combined_statements, df_statements_combined], axis=0, ignore_index=False)
+            df_statements_combined = pd.concat([df_income_statement, df_balance_sheet, df_cashflow_statement], axis=1)
+            
+            df_final_combined_statements = pd.concat([df_final_combined_statements, df_statements_combined], axis=0, ignore_index=False)
 
     if df_final_combined_statements.empty:
         print(f"Didn't find financial filings for {ticker}")
@@ -206,7 +217,7 @@ def fetchCompanyFundamentals(email, ticker, report_count=FIVE_YEARS_OF_REPORTS):
 
 def chartCompanyFundamentals(dataframe):
     for col in dataframe.columns:
-        plt.figure(figsize=(14, 6))
+        plt.figure(figsize=(30, 10))
         plt.plot(dataframe[col], marker='o', linestyle='-')
         plt.title(f'Column: {col}')
         plt.xlabel('Index')

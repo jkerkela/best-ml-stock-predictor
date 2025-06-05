@@ -4,6 +4,7 @@ import torch
 import pandas as pd
 import numpy
 import random
+from datetime import datetime
 
 import fitz
 import scipy
@@ -35,6 +36,14 @@ parser.add_argument('--retrain_financials_analysis', dest='retrain_financials_an
 parser.add_argument('--load_saved_traning_data', dest='load_saved_traning_data', default=False, action=argparse.BooleanOptionalAction)
 parser.add_argument('--save_training_data_to_file', dest='save_training_data_to_file', default=True, action=argparse.BooleanOptionalAction)
 args = parser.parse_args()
+
+def is_datetime(string, format="%Y-%m-%d"):
+    try:
+        datetime.strptime(string, format)
+        return True
+    except ValueError:
+        print(f"DEBUG: invalid format date time string: {string}")
+        return False
 
 def getPriceChangeOnReportDay(ticker, report_date_str, api_key):
     print(f"Getting stock price data for: {ticker} for date: {report_date_str}")
@@ -119,37 +128,38 @@ def parseDataFrameFromFinancials(ticker, report_count, retrain, api_key, email):
                     df_income_statement_raw = financials_obj.income_statement.to_dataframe()
                     latest_earnings_date_column_raw_name = df_income_statement_raw.columns[2]
                     latest_earnings_date_column_sanitized_name = latest_earnings_date_column_raw_name.split(" ", 1)[0] # In 10-Q income and cash flow reports, the column name contains quarter postfix e.g. "2025-03-31 Q1"  
-                    actual_earnings_release_date = financials_obj.filing_date
-                    df_income_statement = getDataFrameWithOnlyRelevantColumns(df_income_statement_raw, latest_earnings_date_column_sanitized_name, latest_earnings_date_column_raw_name)
-                    #NOTE: including the balance sheet and cash flow statement to data set will cause noise and importantance of features such as us-gaap_EarningsPerShareBasic is "lost"
-                    #df_balance_sheet = getDataFrameWithOnlyRelevantColumns(financials_obj.balance_sheet.to_dataframe(), latest_earnings_date_column_sanitized_name, latest_earnings_date_column_raw_name)
-                    #df_cash_flow_statement = getDataFrameWithOnlyRelevantColumns(financials_obj.cash_flow_statement.to_dataframe(), latest_earnings_date_column_sanitized_name, latest_earnings_date_column_raw_name)
-                 
-                    df_quarterly_financials_combined = pd.concat([df_income_statement])
-                    
-                    # transpose data frame to have data "features" as columns, set concept as label column as concept contains items as us-gaap_ProfitLoss, us-gaap_NetIncomeLoss.., 
-                    # add suffix to duplicate columns
-                    df_quarterly_financials_combined = df_quarterly_financials_combined.transpose()
-                    df_quarterly_financials_combined.columns = df_quarterly_financials_combined.iloc[0]
-                    new_columns = pd.Series(df_quarterly_financials_combined.columns).groupby(df_quarterly_financials_combined.columns).cumcount().astype(str)
-                    df_quarterly_financials_combined.columns = [f"{col}_{suffix}" if suffix != "0" else col for col, suffix in zip(df_quarterly_financials_combined.columns, new_columns)]
-                    # calculate the diff of latest report financials and previous report financials
-                    df_quarterly_financials_combined = df_quarterly_financials_combined.apply(pd.to_numeric, errors="coerce")
+                    if is_datetime(latest_earnings_date_column_sanitized_name):
+                        actual_earnings_release_date = financials_obj.filing_date
+                        df_income_statement = getDataFrameWithOnlyRelevantColumns(df_income_statement_raw, latest_earnings_date_column_sanitized_name, latest_earnings_date_column_raw_name)
+                        #NOTE: including the balance sheet and cash flow statement to data set will cause noise and importantance of features such as us-gaap_EarningsPerShareBasic is "lost"
+                        #df_balance_sheet = getDataFrameWithOnlyRelevantColumns(financials_obj.balance_sheet.to_dataframe(), latest_earnings_date_column_sanitized_name, latest_earnings_date_column_raw_name)
+                        #df_cash_flow_statement = getDataFrameWithOnlyRelevantColumns(financials_obj.cash_flow_statement.to_dataframe(), latest_earnings_date_column_sanitized_name, latest_earnings_date_column_raw_name)
+                     
+                        df_quarterly_financials_combined = pd.concat([df_income_statement])
+                        
+                        # transpose data frame to have data "features" as columns, set concept as label column as concept contains items as us-gaap_ProfitLoss, us-gaap_NetIncomeLoss.., 
+                        # add suffix to duplicate columns
+                        df_quarterly_financials_combined = df_quarterly_financials_combined.transpose()
+                        df_quarterly_financials_combined.columns = df_quarterly_financials_combined.iloc[0]
+                        new_columns = pd.Series(df_quarterly_financials_combined.columns).groupby(df_quarterly_financials_combined.columns).cumcount().astype(str)
+                        df_quarterly_financials_combined.columns = [f"{col}_{suffix}" if suffix != "0" else col for col, suffix in zip(df_quarterly_financials_combined.columns, new_columns)]
+                        # calculate the diff of latest report financials and previous report financials
+                        df_quarterly_financials_combined = df_quarterly_financials_combined.apply(pd.to_numeric, errors="coerce")
 
-                    if retrain and not compare_to_prev: # we only fetch price change if we are retraining with historical data, in case of prediction, we won't have price data available
-                        price_change = getPriceChangeOnReportDay(args.ticker, actual_earnings_release_date, api_key)
-                    # Add row of comparing YoY financials to final dataframe. 
-                    # Keep only the row with numeric results diff, replace NAN values with 0
-                    if compare_to_prev:
-                        df_diffed_financials = pd.DataFrame(prev_df_combined_statements.iloc[1] - df_quarterly_financials_combined.iloc[1]).transpose()
-                        if retrain:
-                            df_diffed_financials[STOCK_PRICE_CHANGE_IN_PERCENTS_ON_REPORT_DAY_COLUMN] = price_change
-                        df_final_combined_statements = pd.concat([df_final_combined_statements, df_diffed_financials], ignore_index=True)
-                    else:
-                        prev_df_combined_statements = df_quarterly_financials_combined
-                        global EARNINGS_REPORT_DATE
-                        EARNINGS_REPORT_DATE = actual_earnings_release_date
-                        compare_to_prev = True
+                        if retrain and not compare_to_prev: # we only fetch price change if we are retraining with historical data, in case of prediction, we won't have price data available
+                            price_change = getPriceChangeOnReportDay(args.ticker, actual_earnings_release_date, api_key)
+                        # Add row of comparing YoY financials to final dataframe. 
+                        # Keep only the row with numeric results diff, replace NAN values with 0
+                        if compare_to_prev:
+                            df_diffed_financials = pd.DataFrame(prev_df_combined_statements.iloc[1] - df_quarterly_financials_combined.iloc[1]).transpose()
+                            if retrain:
+                                df_diffed_financials[STOCK_PRICE_CHANGE_IN_PERCENTS_ON_REPORT_DAY_COLUMN] = price_change
+                            df_final_combined_statements = pd.concat([df_final_combined_statements, df_diffed_financials], ignore_index=True)
+                        else:
+                            prev_df_combined_statements = df_quarterly_financials_combined
+                            global EARNINGS_REPORT_DATE
+                            EARNINGS_REPORT_DATE = actual_earnings_release_date
+                            compare_to_prev = True
         df_eps_surprise_data = getEPSSurpiseData(ticker, report_count - 3)
         df_final_combined_statements[EPS_DIFF_COLUMN_NAME] = df_eps_surprise_data[EPS_DIFF_COLUMN_NAME].values
         df_final_combined_statements.fillna(0, inplace=True)

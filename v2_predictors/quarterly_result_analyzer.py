@@ -12,15 +12,18 @@ import matplotlib.pyplot as plt
 from sklearn.metrics import mean_squared_error
 from sklearn.model_selection import LeaveOneOut
 
+import optuna
+
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 import lightgbm as lgb
 import pickle
 
 from edgar import *
 import yfinance as yf
+from tiingo import TiingoClient
 
 STOCK_PRICE_CHANGE_IN_PERCENTS_ON_REPORT_DAY_COLUMN = "price_change_in_percent"
-FINANCIALS_REPORT_LABEL_COLUMN = "concept"
+FINANCIALS_REPORT_ORIGINAL_LABEL_COLUMN = "concept"
 EARNINGS_REPORT_DATE = ""
 EMPTY_ROWS_IN_DEFAULT_EPS_REPORT = 4
 EPS_DIFF_COLUMN_NAME = 'Surprise(%)'
@@ -33,7 +36,7 @@ parser.add_argument('--quarterly_report_file', help='NOTE: Required if --run_sen
 parser.add_argument('--run_sentiment_analysis', dest='run_sentiment_analysis', default=False, action=argparse.BooleanOptionalAction)
 parser.add_argument('--run_financials_analysis', dest='run_financials_analysis', default=False, action=argparse.BooleanOptionalAction)
 parser.add_argument('--retrain_financials_analysis', dest='retrain_financials_analysis', default=False, action=argparse.BooleanOptionalAction)
-parser.add_argument('--load_saved_traning_data', dest='load_saved_traning_data', default=False, action=argparse.BooleanOptionalAction)
+parser.add_argument('--load_saved_training_data', dest='load_saved_training_data', default=False, action=argparse.BooleanOptionalAction)
 parser.add_argument('--save_training_data_to_file', dest='save_training_data_to_file', default=True, action=argparse.BooleanOptionalAction)
 args = parser.parse_args()
 
@@ -95,7 +98,7 @@ def getPriceChangeOnReportDay(ticker, report_date_str, api_key):
 # report date e.g. "2025-03-31": which contains reported values for the period,
 # In 10-Q income and cash flow reports, the column name contains quarter postfix e.g. "2025-03-31 Q1",
 # within this function we wil rename it to date without quarter postfix i.e. to format like e.g. "2025-03-31"
-def getDataFrameWithOnlyLatestData(dataframe, earnings_date, earnings_date_with_postfix):
+def getDataFrameWithOnlyRelevantColumns(dataframe, earnings_date, earnings_date_with_postfix):
     try:
         df_with_relevant_columns = dataframe[[FINANCIALS_REPORT_ORIGINAL_LABEL_COLUMN, earnings_date_with_postfix]]
         return df_with_relevant_columns.rename(columns={earnings_date_with_postfix: earnings_date})
@@ -105,6 +108,13 @@ def getDataFrameWithOnlyLatestData(dataframe, earnings_date, earnings_date_with_
         except:
             print(f"Failed to find correct earnings date {earnings_date} on dataframe, returning empty dataframe")
             return pd.DataFrame()
+            
+def getWithTransformFeaturesToColumns(dataframe):
+    dataframe = dataframe.transpose()
+    dataframe.columns = dataframe.iloc[0]
+    dataframe.drop(FINANCIALS_REPORT_ORIGINAL_LABEL_COLUMN, inplace=True)
+    dataframe = dataframe.apply(pd.to_numeric, errors="coerce")
+    return dataframe
            
 def getEPSSurpiseData(ticker, number_of_quarters):
     stock = yf.Ticker(ticker)
@@ -134,32 +144,22 @@ def parseDataFrameFromFinancials(ticker, report_count, retrain, api_key, email):
                         #NOTE: including the balance sheet and cash flow statement to data set will cause noise and importantance of features such as us-gaap_EarningsPerShareBasic is "lost"
                         #df_balance_sheet = getDataFrameWithOnlyRelevantColumns(financials_obj.balance_sheet.to_dataframe(), latest_earnings_date_column_sanitized_name, latest_earnings_date_column_raw_name)
                         #df_cash_flow_statement = getDataFrameWithOnlyRelevantColumns(financials_obj.cash_flow_statement.to_dataframe(), latest_earnings_date_column_sanitized_name, latest_earnings_date_column_raw_name)
-                     
-                        df_quarterly_financials_combined = pd.concat([df_income_statement])
-                        
-                        # transpose data frame to have data "features" as columns, set concept as label column as concept contains items as us-gaap_ProfitLoss, us-gaap_NetIncomeLoss.., 
-                        # add suffix to duplicate columns
-                        df_quarterly_financials_combined = df_quarterly_financials_combined.transpose()
-                        df_quarterly_financials_combined.columns = df_quarterly_financials_combined.iloc[0]
-                        new_columns = pd.Series(df_quarterly_financials_combined.columns).groupby(df_quarterly_financials_combined.columns).cumcount().astype(str)
-                        df_quarterly_financials_combined.columns = [f"{col}_{suffix}" if suffix != "0" else col for col, suffix in zip(df_quarterly_financials_combined.columns, new_columns)]
-                        # calculate the diff of latest report financials and previous report financials
-                        df_quarterly_financials_combined = df_quarterly_financials_combined.apply(pd.to_numeric, errors="coerce")
-
-                        if retrain and not compare_to_prev: # we only fetch price change if we are retraining with historical data, in case of prediction, we won't have price data available
-                            price_change = getPriceChangeOnReportDay(args.ticker, actual_earnings_release_date, api_key)
-                        # Add row of comparing YoY financials to final dataframe. 
-                        # Keep only the row with numeric results diff, replace NAN values with 0
-                        if compare_to_prev:
-                            df_diffed_financials = pd.DataFrame(prev_df_combined_statements.iloc[1] - df_quarterly_financials_combined.iloc[1]).transpose()
-                            if retrain:
-                                df_diffed_financials[STOCK_PRICE_CHANGE_IN_PERCENTS_ON_REPORT_DAY_COLUMN] = price_change
-                            df_final_combined_statements = pd.concat([df_final_combined_statements, df_diffed_financials], ignore_index=True)
-                        else:
-                            prev_df_combined_statements = df_quarterly_financials_combined
-                            global EARNINGS_REPORT_DATE
-                            EARNINGS_REPORT_DATE = actual_earnings_release_date
-                            compare_to_prev = True
+                        if not df_income_statement.empty:
+                            df_income_statement = getWithTransformFeaturesToColumns(df_income_statement)
+                            df_quarterly_financials_combined = pd.concat([df_income_statement])
+                            if retrain and not compare_to_prev: # we only fetch price change if we are retraining with historical data, in case of prediction, we won't have price data available
+                                price_change = getPriceChangeOnReportDay(args.ticker, actual_earnings_release_date, api_key)
+                            # Add row of comparing YoY financials to final dataframe. 
+                            if compare_to_prev:
+                                df_diffed_financials = prev_df_combined_statements.reset_index(drop=True) - df_quarterly_financials_combined.reset_index(drop=True)
+                                if retrain:
+                                    df_diffed_financials[STOCK_PRICE_CHANGE_IN_PERCENTS_ON_REPORT_DAY_COLUMN] = price_change
+                                df_final_combined_statements = pd.concat([df_final_combined_statements, df_diffed_financials])
+                            else:
+                                prev_df_combined_statements = df_quarterly_financials_combined
+                                global EARNINGS_REPORT_DATE
+                                EARNINGS_REPORT_DATE = actual_earnings_release_date
+                                compare_to_prev = True
         df_eps_surprise_data = getEPSSurpiseData(ticker, report_count - 3)
         df_final_combined_statements[EPS_DIFF_COLUMN_NAME] = df_eps_surprise_data[EPS_DIFF_COLUMN_NAME].values
         df_final_combined_statements.fillna(0, inplace=True)
@@ -185,6 +185,55 @@ def saveFinancialsModel(model, ticker, model_name="lightgbm_financials_predict_m
 def loadFinancialsModel(ticker, model_name="lightgbm_financials_predict_model"):    
     with open(model_name + ticker + ".pkl", "rb") as f:
         return pickle.load(f)
+
+def trainModel(dataframe, ticker): 
+    X = dataframe.drop(columns=[STOCK_PRICE_CHANGE_IN_PERCENTS_ON_REPORT_DAY_COLUMN])
+    y = dataframe[STOCK_PRICE_CHANGE_IN_PERCENTS_ON_REPORT_DAY_COLUMN] 
+
+    params = {
+        'objective': 'regression',
+        'boosting_type': 'gbdt',
+        'metric': 'rmse',
+        'num_leaves': 2,
+        'max_depth': 2,
+        'learning_rate': 0.03,
+        'n_estimators': 100,
+        'min_child_samples': 1,
+        'reg_alpha': 0.5,
+        'reg_lambda': 0.5,
+        'subsample': 0.8,
+        'subsample_freq': 1,
+        'colsample_bytree': 0.8,
+        'early_stopping_rounds': 15
+    }
+    model = lgb.LGBMRegressor(**params)
+    loo = LeaveOneOut()
+    validation_rmse_scores = []
+    train_rmse_scores = []
+    for train_index, test_index in loo.split(X):
+        X_train, X_test = X.iloc[train_index], X.iloc[test_index]
+        y_train, y_test = y.iloc[train_index], y.iloc[test_index] 
+        model.fit(X_train, y_train, eval_set=[(X_train, y_train), (X_test, y_test)], eval_metric="rmse")
+        
+        train_rmse = model.evals_result_["training"]["rmse"][-1]
+        validation_rmse = model.evals_result_["valid_1"]["rmse"][-1]
+        
+        train_rmse_scores.append(train_rmse)
+        validation_rmse_scores.append(validation_rmse)
+
+    feature_importances = model.feature_importances_ 
+    feature_names = model.booster_.feature_name()
+    importance_df = pd.DataFrame({ 'feature': feature_names, 'importance': feature_importances }) 
+    importance_df.to_csv(f"{args.ticker}_feature_importance_data.csv", index=False)
+    print(f"Check feature importance from: {ticker}_feature_importance_data.csv")
+    
+    #TODO: we have overfitting problem: Average training RMSE: 0.49, Average validation RMSE: 3.15
+    print(f"Model training RMSE scores: {train_rmse_scores}")
+    print(f"Average training RMSE: {numpy.mean(train_rmse_scores)}")
+    print(f"Model validation RMSE scores: {validation_rmse_scores}")
+    print(f"Average validation RMSE: {numpy.mean(validation_rmse_scores)}")
+
+    saveFinancialsModel(model, ticker)
 
 def main():    
     if args.run_sentiment_analysis and args.quarterly_report_file:
@@ -220,67 +269,18 @@ def main():
     if args.run_financials_analysis or args.retrain_financials_analysis:
         api_key = '' if not args.api_key else args.api_key
         df_combined_financials_only_numeric_data = pd.DataFrame()
-        if args.load_saved_traning_data:
-            df_combined_financials_only_numeric_data = pd.read_csv(f"{args.ticker}_traning_data.csv")
+        if args.load_saved_training_data:
+            df_combined_financials_only_numeric_data = pd.read_csv(f"{args.ticker}_training_data.csv")
         else:
             df_combined_financials_only_numeric_data = getFinancialsDataOnlyNumeric(args.email, args.ticker, args.retrain_financials_analysis, api_key)
             if not df_combined_financials_only_numeric_data.empty and args.save_training_data_to_file:
-                df_combined_financials_only_numeric_data.to_csv(f"{args.ticker}_traning_data.csv", index=False)
+                df_combined_financials_only_numeric_data.to_csv(f"{args.ticker}_training_data.csv", index=False)
         if df_combined_financials_only_numeric_data.empty:
-            print(f"Unable to get traning data for {args.ticker}")
+            print(f"Unable to get training data for {args.ticker}")
             return
         model = None
         if args.retrain_financials_analysis:
-            columns = list(df_combined_financials_only_numeric_data.columns)
-            columns[-2], columns[-1] = columns[-1], columns[-2]
-            df_combined_financials_only_numeric_data = df_combined_financials_only_numeric_data[columns]
-            X = df_combined_financials_only_numeric_data.iloc[:, :-1] # features, all columns except the price change column
-            y = df_combined_financials_only_numeric_data.iloc[:, -1] # target column
-
-            params = {
-                'objective': 'regression',
-                'boosting_type': 'gbdt',
-                'metric': 'rmse',
-                'num_leaves': 2,
-                'max_depth': 2,
-                'learning_rate': 0.03,
-                'n_estimators': 100,
-                'min_child_samples': 1,
-                'reg_alpha': 0.5,
-                'reg_lambda': 0.5,
-                'subsample': 0.8,
-                'subsample_freq': 1,
-                'colsample_bytree': 0.8,
-                'early_stopping_rounds': 15
-            }
-            model = lgb.LGBMRegressor(**params)
-            loo = LeaveOneOut()
-            validation_rmse_scores = []
-            train_rmse_scores = []
-            for train_index, test_index in loo.split(X):
-                X_train, X_test = X.iloc[train_index], X.iloc[test_index]
-                y_train, y_test = y.iloc[train_index], y.iloc[test_index] 
-                model.fit(X_train, y_train, eval_set=[(X_train, y_train), (X_test, y_test)], eval_metric="rmse")
-                
-                train_rmse = model.evals_result_["training"]["rmse"][-1]
-                validation_rmse = model.evals_result_["valid_1"]["rmse"][-1]
-                
-                train_rmse_scores.append(train_rmse)
-                validation_rmse_scores.append(validation_rmse)
-
-            feature_importances = model.feature_importances_ 
-            feature_names = model.booster_.feature_name()
-            importance_df = pd.DataFrame({ 'feature': feature_names, 'importance': feature_importances }) 
-            importance_df.to_csv(f"{args.ticker}_feature_importance_data.csv", index=False)
-            print(f"Check feature importance from: {args.ticker}_feature_importance_data.csv")
-            
-            #TODO: we have overfitting problem: Average training RMSE: 0.49, Average validation RMSE: 3.15
-            print(f"Model training RMSE scores: {train_rmse_scores}")
-            print(f"Average training RMSE: {numpy.mean(train_rmse_scores)}")
-            print(f"Model validation RMSE scores: {validation_rmse_scores}")
-            print(f"Average validation RMSE: {numpy.mean(validation_rmse_scores)}")
-
-            saveFinancialsModel(model, args.ticker)
+            trainModel(df_combined_financials_only_numeric_data, args.ticker)
         else:
             model = loadFinancialsModel(args.ticker)
             final_pred = model.predict(df_combined_financials_only_numeric_data, predict_disable_shape_check=True)

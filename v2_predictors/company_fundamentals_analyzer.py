@@ -21,6 +21,7 @@ parser.add_argument('--email', required=True, help='User email address for acces
 parser.add_argument('--ticker', required=True, help='Stock ticker to analyze')
 parser.add_argument('--save_data_to_disk', dest='save_data_to_disk', default=True, action=argparse.BooleanOptionalAction)
 parser.add_argument('--load_data_from_disk', dest='load_data_from_disk', default=False, action=argparse.BooleanOptionalAction)
+parser.add_argument('--retrain_model', dest='retrain_model', default=False, action=argparse.BooleanOptionalAction)
 args = parser.parse_args()
 
 FIVE_YEARS_OF_REPORTS = 20
@@ -145,13 +146,6 @@ def getWithUnnecessaryColumnsFiltered(dataframe, document_type):
         return dataframe[dataframe.columns.intersection(RELEVANT_CASH_FLOW_STATEMENT_COLUMNS)]
     else:
         return dataframe
-        
-
-def saveDataToDisk(dataframe, ticker):
-    dataframe.to_csv(f"{ticker}_fundamental_data.csv", index=True)
-    
-def loadDataFromDisk(ticker):
-    return pd.read_csv(f"{ticker}_fundamental_data.csv", index_col=0)
     
 def fetchCompanyFundamentals(email, ticker, report_count=FIVE_YEARS_OF_REPORTS):
 #		- financial statement, balance sheet and cashflow statement
@@ -221,7 +215,7 @@ def fetchCompanyFundamentals(email, ticker, report_count=FIVE_YEARS_OF_REPORTS):
     return df_final_combined_statements
 
 
-def chartCompanyFundamentals(dataframe):
+def chartCompanyFundamentals(dataframe, ticker):
     for col in dataframe.columns:
         plt.figure(figsize=(30, 10))
         plt.plot(dataframe[col], marker='o', linestyle='-')
@@ -229,7 +223,7 @@ def chartCompanyFundamentals(dataframe):
         plt.xlabel('Index')
         plt.ylabel(col)
         plt.grid()
-        plt.savefig(f"{col}_plot.png", dpi=300, bbox_inches='tight')
+        plt.savefig(f"{ticker}_{col}_plot.png", dpi=300, bbox_inches='tight') 
         plt.close()
         
         
@@ -285,6 +279,12 @@ def trainModel(dataframe, params):
     print("Average Feature Importance Across LOOCV:", avg_importance)
     print(f"Average Cross-Validation Score (MAE): {avg_cv_score}")
 
+def saveDataToDisk(dataframe, ticker):
+    dataframe.to_csv(f"{ticker}_fundamental_data.csv", index=True)
+    
+def loadDataFromDisk(ticker):
+    return pd.read_csv(f"{ticker}_fundamental_data.csv", index_col=0)
+
 def main():
     df_company_fundamentals = pd.DataFrame()
     if args.load_data_from_disk:    
@@ -293,10 +293,11 @@ def main():
         df_company_fundamentals = fetchCompanyFundamentals(args.email, args.ticker)
         if args.save_data_to_disk:
             saveDataToDisk(df_company_fundamentals, args.ticker)
-    chartCompanyFundamentals(df_company_fundamentals)
+    if args.retrain_model:
+        params = evaluateParams(df_company_fundamentals)
+        trainModel(df_company_fundamentals, params)
     
-    params = evaluateParams(df_company_fundamentals)
-    trainModel(df_company_fundamentals, params)
+    chartCompanyFundamentals(df_company_fundamentals, args.ticker)
 
 if __name__ == "__main__":
     main()

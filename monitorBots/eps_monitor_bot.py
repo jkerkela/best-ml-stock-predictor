@@ -4,8 +4,6 @@ import asyncio
 from enum import Enum
 from typing import TypedDict
 
-import pickle
-
 from bs4 import BeautifulSoup
 
 from selenium import webdriver
@@ -15,6 +13,11 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.options import Options
 
 from telegram import Bot
+
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+from common_tools import postTelegramNotification, saveObjectToDisk, loadObjectFromDisk
 
 URL = "https://www.nasdaq.com/market-activity/earnings/daily-earnings-surprise"
 
@@ -34,15 +37,6 @@ class EPSItem(TypedDict):
     company_name: str
     company_symbol: str
     eps_surprise_percent: float
-
-
-def saveEPSObjectToDisk(object_, file_prefix):
-    with open(file_prefix + ".pkl", "wb") as f:
-        pickle.dump(object_, f)
-        
-def loadEPSObjectFromDisk(file_prefix):    
-    with open(file_prefix + ".pkl", "rb") as f:
-        return pickle.load(f)
         
 def parseEPSDataFrom(web_page):
     print("Loading latest trade info")
@@ -83,24 +77,8 @@ def parseEPSDataFrom(web_page):
                 }
                 results.append(result)
     except Exception as e:
-        print(f"Failed to fetch EPS data from source with exception: {e}")
+        print(f"Failed to fetch EPS data from source with exception: {e} \n (this is likely due there are no EPS data populated)")
     return results
-    
-async def postNotification(message, telegram_bot, notification_group):
-    print("Executing the async notification posting loop")
-    retries = 3
-    for attempt in range(retries):
-        try:
-            await telegram_bot.send_message(chat_id=notification_group, text=message)
-            print(f"Sent message to notification group as {message}")
-            return True
-        except Exception as e:
-            if attempt < retries - 1:
-                print(f"DEBUG: message send attempt failed with error: {e}, retrying...")
-                await asyncio.sleep(5)
-            else:
-                print(f"DEBUG: message send attempt failed with error: {e}, retry attemps exceeded")
-                return False
                 
 async def main(args):
     telegram_bot = Bot(token=args.telegram_api_token)
@@ -108,13 +86,13 @@ async def main(args):
     for index, item in enumerate(eps_items_list):
         previously_stored_eps_object = None
         try:
-            previously_stored_eps_object = loadEPSObjectFromDisk(f"{index}_EPS_OBJECT_DISK_FILE_POSTFIX")
+            previously_stored_eps_object = loadObjectFromDisk(f"{index}_EPS_OBJECT_DISK_FILE_POSTFIX")
         except: 
             pass
         if not previously_stored_eps_object == item:
             message = f"Found company: {item["company_name"]} ({item["company_symbol"]}) with EPS surprise of {item["eps_surprise_percent"]}%"
-            await postNotification(message, telegram_bot, args.telegram_notification_group_id)
-            saveEPSObjectToDisk(item, f"{index}_EPS_OBJECT_DISK_FILE_POSTFIX")
+            await postTelegramNotification(message, telegram_bot, args.telegram_notification_group_id)
+            saveObjectToDisk(item, f"{index}_EPS_OBJECT_DISK_FILE_POSTFIX")
     
 
 if __name__ == "__main__":

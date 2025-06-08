@@ -59,7 +59,7 @@ async def main():
                 args.mode = "postmarket"
                 await stock_movers_monitor_bot.main(args)
                 time_on_last_stock_movers_post = time.time()
-            if shouldPost(time_on_last_EPS_monitor_post, EPS_CHECK_INTERVAL) and (isNowInTimePeriod(dt_time(13, 30, 0), dt_time(15, 30, 0), current_time or isNowInTimePeriod(dt_time(23, 0, 0), dt_time(1, 0, 0), current_time)):
+            if shouldPost(time_on_last_EPS_monitor_post, EPS_CHECK_INTERVAL) and (isNowInTimePeriod(dt_time(13, 30, 0), dt_time(15, 30, 0), current_time) or isNowInTimePeriod(dt_time(23, 0, 0), dt_time(1, 0, 0), current_time)):
                 await eps_monitor_bot.main(args)
                 time_on_last_EPS_monitor_post = time.time()
             

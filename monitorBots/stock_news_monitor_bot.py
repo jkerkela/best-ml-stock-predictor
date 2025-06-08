@@ -23,6 +23,10 @@ from transformers import AutoTokenizer, AutoModelForSequenceClassification, pipe
 from huggingface_hub import login
 
 from telegram import Bot
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+from common_tools import postTelegramNotification, saveObjectToDisk, loadObjectFromDisk
 
 
 NEWS_ITEMS_TO_FETCH_PER_TICKER = 1
@@ -31,6 +35,8 @@ SCRAPING_SOURCE_NEWS_URL = SCRAPING_SOURCE_BASE_URL + "/news/"
 NEWS_ITEM_SUMMARY_ELEMENT = "companies-card-summary"
 NEWS_ITEM_URL_ELEMENT = "text-gray-dark feed-link"
 SENTIMENT_THRESHOLD = 0.8
+
+DISK_FILE_NAME_PREFIX = "stock_news_items"
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -46,14 +52,6 @@ Context: {context}\n
 
 json:
 """
-
-def saveNewsObjectToDisk(object_, pickle_name="stock_news_items"):
-    with open(pickle_name + ".pkl", "wb") as f:
-        pickle.dump(object_, f)
-        
-def loadNewsObjectFromDisk(pickle_name="stock_news_items"):    
-    with open(pickle_name + ".pkl", "rb") as f:
-        return pickle.load(f)
         
 class ItemStatus(Enum):
     CHECK_RELEVANCE = 1
@@ -76,7 +74,7 @@ class LLMState(TypedDict):
 def getLatestNewsItems(state: LLMState, tickers):
     print("Getting latest news items")
     try:
-        state["latest_fetched_news_per_ticker"] = loadNewsObjectFromDisk()
+        state["latest_fetched_news_per_ticker"] = loadObjectFromDisk(DISK_FILE_NAME_PREFIX)
     except: 
         pass
     for ticker in tickers:
@@ -112,7 +110,7 @@ def getLatestNewsItems(state: LLMState, tickers):
                     "sentiment" : ("undefined", 0)
                 }
                 state["latest_fetched_news_per_ticker"][ticker] = [news_item]
-    saveNewsObjectToDisk(state["latest_fetched_news_per_ticker"])
+    saveObjectToDisk(state["latest_fetched_news_per_ticker"], DISK_FILE_NAME_PREFIX)
     return state
 
 #TODO: this can be combined to postNotification agentic step
@@ -139,7 +137,7 @@ def checkNewsItemsRelevance(state: LLMState, relevance_check_llm):
                         print(f"Error parsing the response with error: {e}")
                 else:
                     print("Warning: Unexpected response format from LLM.")
-    saveNewsObjectToDisk(state["latest_fetched_news_per_ticker"])
+    saveObjectToDisk(state["latest_fetched_news_per_ticker"], DISK_FILE_NAME_PREFIX)
     return state
 
 def analyzeNewsItems(state: LLMState):
@@ -182,25 +180,8 @@ async def postNotification_test(message: str, telegram_api_token, notification_g
     """
     telegram_bot = Bot(token=telegram_api_token)
     print("Executing the notification posting tool")
-    await postNotification(message, telegram_bot, notification_group)
+    await postTelegramNotification(message, telegram_bot, notification_group)
 
-   
-
-async def postNotification(message, telegram_bot, notification_group):
-    print("DEBUG: Executing the async notification posting loop")
-    retries = 3
-    for attempt in range(retries):
-        try:
-            await telegram_bot.send_message(chat_id=notification_group, text=message)
-            print("DEBUG: send a notification message to notification group")
-            return True
-        except Exception as e:
-            if attempt < retries - 1:
-                print(f"DEBUG: message send attempt failed with error: {e}, retrying...")
-                await asyncio.sleep(5)
-            else:
-                print(f"DEBUG: message send attempt failed with error: {e}, retry attemps exceeded")
-                return False
                   
 def isSentimentOverThreshold(sentiment, probability):
     return (sentiment == "positive" or sentiment == "negative") and probability > SENTIMENT_THRESHOLD
@@ -217,7 +198,9 @@ async def postNewsItems(state: LLMState, agent_executor, telegram_api_token, not
                     )
                     print(f"Agent return: {result}")
                     news_item["item_status"] = ItemStatus.POSTED
-    saveNewsObjectToDisk(state["latest_fetched_news_per_ticker"])
+                else:
+                    news_item["item_status"] = ItemStatus.IGNORE
+    saveObjectToDisk(state["latest_fetched_news_per_ticker"], DISK_FILE_NAME_PREFIX)
     return state
 
 def getNextStage(state: LLMState):

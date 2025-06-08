@@ -19,6 +19,11 @@ from telegram import Bot
 
 from huggingface_hub import snapshot_download
 
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+from common_tools import postTelegramNotification, saveObjectToDisk, loadObjectFromDisk
+
 JSON_TRADE_DATE_KEY = "DATE"
 JSON_COMPANY_SYMBOL = "SYMBOL"
 JSON_TRADE_SIZE= "SIZE"
@@ -44,14 +49,6 @@ DOCUMENT: \n
 json:
 """
 
-
-def saveTradeObjectToDisk(object_, file_prefix=DISK_FILE_PREFIX_NAME_OF_LATEST_TRADE):
-    with open(file_prefix + ".pkl", "wb") as f:
-        pickle.dump(object_, f)
-        
-def loadTradeObjectFromDisk(file_prefix=DISK_FILE_PREFIX_NAME_OF_LATEST_TRADE):    
-    with open(file_prefix + ".pkl", "rb") as f:
-        return pickle.load(f)
         
 def loadDataSourceFromWeb(web_page):
     print("Loading latest trade info")
@@ -81,23 +78,6 @@ def queryLatestTradeAsJson(llm, data):
             print("Warning: Unexpected response format from LLM.")
     return None
     
-async def postNotification(message, telegram_bot, notification_group, source_url):
-    print("Executing the async notification posting loop")
-    retries = 3
-    for attempt in range(retries):
-        try:
-            complete_message = f"Found new trade from: {source_url} as:\n {str(message)}"
-            await telegram_bot.send_message(chat_id=notification_group, text=complete_message)
-            print(f"Sent message to notification group as {complete_message}")
-            return True
-        except Exception as e:
-            if attempt < retries - 1:
-                print(f"DEBUG: message send attempt failed with error: {e}, retrying...")
-                await asyncio.sleep(5)
-            else:
-                print(f"DEBUG: message send attempt failed with error: {e}, retry attemps exceeded")
-                return False
-    
 async def main(args):
     print("Running stock trades monitor")
     model_name = "HuggingFaceTB/SmolLM2-1.7B-Instruct"
@@ -116,13 +96,14 @@ async def main(args):
         parsed_url = urlparse(args.source_url_for_trades)
         last_url_segment = parsed_url.path.rstrip('/').split('/')[-1]
         try:
-            latest_saved_trade = loadTradeObjectFromDisk(last_url_segment)
+            latest_saved_trade = loadObjectFromDisk(last_url_segment)
         except: 
             pass
         do_post_latest_trade = True if not latest_trade == latest_saved_trade else False
         if do_post_latest_trade:
-            if await postNotification(latest_trade, telegram_bot, args.telegram_notification_group_id, args.source_url_for_trades):
-                saveTradeObjectToDisk(latest_trade, last_url_segment)
+            complete_message = f"Found new trade from: {args.source_url_for_trades} as:\n {str(latest_trade)}"
+            if await postTelegramNotification(complete_message, telegram_bot, args.telegram_notification_group_id):
+                saveObjectToDisk(latest_trade, last_url_segment)
         else:
             print("Latest trade already posted, skipping posting")
         if args.single_run:

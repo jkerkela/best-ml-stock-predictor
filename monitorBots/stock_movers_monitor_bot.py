@@ -6,25 +6,13 @@ from tradingview_screener import Query, col
 
 from telegram import Bot
 
-MARKET_CHANGE_PERCENT_THRESHOLD = 10
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+from common_tools import postTelegramNotification
 
+MARKET_CHANGE_PERCENT_THRESHOLD = 10
 HUNDRED_MILLION = 100000000
-    
-async def postNotification(message, telegram_bot, notification_group):
-    print("Executing the async notification posting loop")
-    retries = 3
-    for attempt in range(retries):
-        try:
-            await telegram_bot.send_message(chat_id=notification_group, text=message)
-            print(f"Sent message to notification group as {message}")
-            return True
-        except Exception as e:
-            if attempt < retries - 1:
-                print(f"DEBUG: message send attempt failed with error: {e}, retrying...")
-                await asyncio.sleep(5)
-            else:
-                print(f"DEBUG: message send attempt failed with error: {e}, retry attemps exceeded")
-                return False
                 
 async def main(args):
     print("Running stock movers monitor")
@@ -54,7 +42,7 @@ async def main(args):
             if abs(market_change_percent) > MARKET_CHANGE_PERCENT_THRESHOLD:
                 message = f"Found loser with large change: {company_symbol}, {market_to_check} change: {market_change_percent}%"
                 print("posting the notification")
-                await postNotification(message, telegram_bot, args.telegram_notification_group_id)
+                await postTelegramNotification(message, telegram_bot, args.telegram_notification_group_id)
             
     
 if __name__ == "__main__":

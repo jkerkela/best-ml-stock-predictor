@@ -12,6 +12,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from common_tools import postTelegramNotification
     
 async def main(args):
+    print("Running mail notification monitor")
     mail = imaplib.IMAP4_SSL("mail.mailo.com")
     mail.login(args.email_address, args.email_password)
     mail.select("inbox")

@@ -77,10 +77,11 @@ def parseEPSDataFrom(web_page):
                 }
                 results.append(result)
     except Exception as e:
-        print(f"Failed to fetch EPS data from source with exception: {e} \n (this is likely due there are no EPS data populated)")
+        print(f"Failed to fetch EPS data from source with exception: {e} \n (this is likely due there are no EPS data populated for the day)")
     return results
                 
 async def main(args):
+    print("Running EPS monitor")
     telegram_bot = Bot(token=args.telegram_api_token)
     eps_items_list = parseEPSDataFrom(URL)
     for index, item in enumerate(eps_items_list):

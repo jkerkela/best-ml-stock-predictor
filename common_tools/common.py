@@ -1,4 +1,5 @@
 import pickle
+import asyncio
 from telegram import Bot
 
 async def postTelegramNotification(message, telegram_bot, notification_group):

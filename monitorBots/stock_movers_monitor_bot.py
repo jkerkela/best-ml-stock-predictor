@@ -12,6 +12,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from common_tools import postTelegramNotification
 
 MARKET_CHANGE_PERCENT_THRESHOLD = 10
+MARKET_CHANGE_PERCENT_THRESHOLD_BIG = 30
 HUNDRED_MILLION = 100000000
                 
 async def main(args):
@@ -23,10 +24,19 @@ async def main(args):
             company_name = item["shortName"]
             stock_symbol = item["symbol"]
             market_change = item["regularMarketChangePercent"]
-            if abs(market_change) > MARKET_CHANGE_PERCENT_THRESHOLD:
-                message = f"Found loser with large change: {company_name} ({stock_symbol}), market change: {market_change}%"
+            if market_change is not None and abs(market_change) > MARKET_CHANGE_PERCENT_THRESHOLD:
+                message = f"Found loser with large change: {company_name} ({stock_symbol}), market change: {market_change} %"
                 print("posting the notification")
-                await postNotification(message, telegram_bot, args.telegram_notification_group_id)
+                await postTelegramNotification(message, telegram_bot, args.telegram_notification_group_id)
+        daily_gainers_res = yf.screen('day_gainers', count=5)
+        for item in daily_gainers_res["quotes"]:
+            company_name = item["shortName"]
+            stock_symbol = item["symbol"]
+            market_change = item["regularMarketChangePercent"]
+            if market_change is not None and abs(market_change) > MARKET_CHANGE_PERCENT_THRESHOLD_BIG:
+                message = f"Found gainer with large change: {company_name} ({stock_symbol}), market change: {market_change} %"
+                print("posting the notification")
+                await postTelegramNotification(message, telegram_bot, args.telegram_notification_group_id)
     else:
         market_to_check = "premarket_change" if args.mode == "premarket" else "postmarket_change"
         _, losers_df = premarket_losers = (Query()
@@ -39,8 +49,22 @@ async def main(args):
         for index, loser in losers_df.iterrows():
             company_symbol = loser.iloc[0]
             market_change_percent = loser.iloc[1]
-            if abs(market_change_percent) > MARKET_CHANGE_PERCENT_THRESHOLD:
+            if market_change_percent is not None and abs(market_change_percent) > MARKET_CHANGE_PERCENT_THRESHOLD:
                 message = f"Found loser with large change: {company_symbol}, {market_to_check} change: {market_change_percent}%"
+                print("posting the notification")
+                await postTelegramNotification(message, telegram_bot, args.telegram_notification_group_id)
+        _, gainers_df = premarket_gainers = (Query()
+            .select(market_to_check)
+            .where(col('market_cap_basic') > HUNDRED_MILLION)
+            .order_by(market_to_check, ascending=False)
+            .limit(5)
+            .get_scanner_data()
+        )
+        for index, gainer in gainers_df.iterrows():
+            company_symbol = gainer.iloc[0]
+            market_change_percent = gainer.iloc[1]
+            if market_change_percent is not None and abs(market_change_percent) > MARKET_CHANGE_PERCENT_THRESHOLD:
+                message = f"Found gainer with large change: {company_symbol}, {market_to_check} change: {market_change_percent}%"
                 print("posting the notification")
                 await postTelegramNotification(message, telegram_bot, args.telegram_notification_group_id)
             

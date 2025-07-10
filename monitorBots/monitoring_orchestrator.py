@@ -50,11 +50,11 @@ async def main():
         if is_weekday():
             tz = pytz.timezone("Europe/Helsinki") 
             current_time = datetime.now(tz).time()
-            if shouldPost(time_on_last_premarket_movers_post, STOCK_MOVERS_POST_INTERVAL_IN_SECONDS) and isNowInTimePeriod(dt_time(10, 30, 0), dt_time(16, 30, 0), current_time):
+            if shouldPost(time_on_last_premarket_movers_post, STOCK_MOVERS_POST_INTERVAL_IN_SECONDS) and isNowInTimePeriod(dt_time(14, 30, 0), dt_time(16, 30, 0), current_time):
                 args.mode = "premarket"
                 await stock_movers_monitor_bot.main(args)
                 time_on_last_premarket_movers_post = time.time()
-            elif shouldPost(time_on_last_stock_movers_post, STOCK_MOVERS_POST_INTERVAL_IN_SECONDS) and isNowInTimePeriod(dt_time(16, 30, 0), dt_time(18, 0, 0), current_time):
+            elif shouldPost(time_on_last_stock_movers_post, STOCK_MOVERS_POST_INTERVAL_IN_SECONDS) and isNowInTimePeriod(dt_time(16, 30, 0), dt_time(17, 30, 0), current_time):
                 args.mode = "market"
                 await stock_movers_monitor_bot.main(args)
                 time_on_last_stock_movers_post = time.time()

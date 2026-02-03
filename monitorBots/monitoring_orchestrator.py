@@ -7,24 +7,16 @@ import pytz
 import stock_movers_monitor_bot
 import tweet_monitor_bot
 import eps_monitor_bot
-import mail_notification_monitor
-#import stock_news_monitor_bot
-#import trade_monitor_bot
 
 STOCK_MOVERS_POST_INTERVAL_IN_SECONDS = 900
 STOCK_NEWS_POST_INTERVAL_IN_SECONDS = 900
 STOCK_TRADE_MONITOR_POST_INTERVAL_IN_SECONDS = 3600
 EPS_CHECK_INTERVAL = 5400
 parser = argparse.ArgumentParser("stock_movers_monitor")
-parser.add_argument('--email_address', required=True)
-parser.add_argument('--email_password', required=True)
 parser.add_argument('--telegram_api_token', required=True)
 parser.add_argument('--telegram_notification_group_id', required=True)
-parser.add_argument('--twitter_API_key', required=True)
+parser.add_argument('--twitter_API_token', required=True)
 parser.add_argument('--twitter_user_handle', required=True, help='The twitter handle to poll')
-#parser.add_argument('--huggingface_api_key', required=True)
-#parser.add_argument('--tickers', nargs='+', required=True, help='The tickers to monitor')
-#parser.add_argument('--source_url_for_trades', required=True, help='data source shall be URL that contains trade information on html GET request')
 parser.add_argument("--mode", choices=["premarket", "market", "postmarket"], required=False)
 parser.add_argument('--single_run', dest='single_run', default=True, action=argparse.BooleanOptionalAction)
 args = parser.parse_args()
@@ -68,20 +60,9 @@ async def main():
             if shouldPost(time_on_last_EPS_monitor_post, EPS_CHECK_INTERVAL) and (isNowInTimePeriod(dt_time(13, 30, 0), dt_time(15, 30, 0), current_time) or isNowInTimePeriod(dt_time(23, 0, 0), dt_time(1, 0, 0), current_time)):
                 await eps_monitor_bot.main(args)
                 time_on_last_EPS_monitor_post = time.time()
-            
-        # NOTE: in both below cases, we need more accurate local LLM model, to avoid false outputs and faster inference, currently SMOL is used
-        # Stock news are now included in mail notification, it shouldn't be too noisy, even as it doesn't use LLM to analyze the news content
-        #if shouldPost(time_on_last_news_post, STOCK_NEWS_POST_INTERVAL_IN_SECONDS):
-        #    await stock_news_monitor_bot.main(args)
-        #    time_on_last_news_post = time.time()
-        # Stock trades are now fetched via twitter, it has more coverage, but should not be too noisy
-        #if shouldPost(time_on_last_trade_monitor_post, STOCK_TRADE_MONITOR_POST_INTERVAL_IN_SECONDS):
-        #    await trade_monitor_bot.main(args)
-        #    time_on_last_trade_monitor_post = time.time()
         if shouldPost(time_on_last_trade_monitor_post, STOCK_TRADE_MONITOR_POST_INTERVAL_IN_SECONDS):
-            await trade_monitor_bot.main(args)
+            await tweet_monitor_bot.main(args)
             time_on_last_trade_monitor_post = time.time()
-        await mail_notification_monitor.main(args)
         time.sleep(60)
 if __name__ == "__main__":
     try:

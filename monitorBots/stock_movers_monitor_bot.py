@@ -41,7 +41,7 @@ async def main(args):
         market_to_check = "premarket_change" if args.mode == "premarket" else "postmarket_change"
         _, losers_df = premarket_losers = (Query()
             .select(market_to_check)
-            .where(col('market_cap_basic') > HUNDRED_MILLION)
+            .where(col('market_cap_basic') > (HUNDRED_MILLION * 0.5))
             .order_by(market_to_check, ascending=True)
             .limit(5)
             .get_scanner_data()
@@ -55,7 +55,7 @@ async def main(args):
                 await postTelegramNotification(message, telegram_bot, args.telegram_notification_group_id)
         _, gainers_df = premarket_gainers = (Query()
             .select(market_to_check)
-            .where(col('market_cap_basic') > HUNDRED_MILLION)
+            .where(col('market_cap_basic') > (HUNDRED_MILLION * 0.5))
             .order_by(market_to_check, ascending=False)
             .limit(5)
             .get_scanner_data()

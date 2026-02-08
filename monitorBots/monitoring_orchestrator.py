@@ -7,12 +7,15 @@ import pytz
 import stock_movers_monitor_bot
 import tweet_monitor_bot
 import eps_monitor_bot
+import IV_monitor_bot
 
 STOCK_MOVERS_POST_INTERVAL_IN_SECONDS = 900
 STOCK_NEWS_POST_INTERVAL_IN_SECONDS = 900
 STOCK_TRADE_MONITOR_POST_INTERVAL_IN_SECONDS = 3600
-EPS_CHECK_INTERVAL = 5400
-parser = argparse.ArgumentParser("stock_movers_monitor")
+EPS_CHECK_INTERVAL_IN_SECONDS = 5400
+IV_CHECK_INTERVALI_IN_SECONDS = 900
+
+parser = argparse.ArgumentParser("stock_monitor")
 parser.add_argument('--telegram_api_token', required=True)
 parser.add_argument('--telegram_notification_group_id', required=True)
 parser.add_argument('--twitter_API_token', required=True)
@@ -37,9 +40,9 @@ def shouldPost(time_on_last_post, interval):
 async def main():
     time_on_last_stock_movers_post = -1
     time_on_last_premarket_movers_post = -1
-    time_on_last_news_post = time.time() # Do not check on first run
     time_on_last_trade_monitor_post = time.time() # Do not check on first run
     time_on_last_EPS_monitor_post = -1
+    time_on_last_IV_monitor_post = -1
     while True:
         print("Checking if monitoring bots need to run")
         if is_weekday():
@@ -57,9 +60,12 @@ async def main():
                 args.mode = "postmarket"
                 await stock_movers_monitor_bot.main(args)
                 time_on_last_stock_movers_post = time.time()
-            if shouldPost(time_on_last_EPS_monitor_post, EPS_CHECK_INTERVAL) and (isNowInTimePeriod(dt_time(13, 30, 0), dt_time(15, 30, 0), current_time) or isNowInTimePeriod(dt_time(23, 0, 0), dt_time(1, 0, 0), current_time)):
+            if shouldPost(time_on_last_EPS_monitor_post, EPS_CHECK_INTERVAL_IN_SECONDS) and (isNowInTimePeriod(dt_time(13, 30, 0), dt_time(15, 30, 0), current_time) or isNowInTimePeriod(dt_time(23, 0, 0), dt_time(1, 0, 0), current_time)):
                 await eps_monitor_bot.main(args)
                 time_on_last_EPS_monitor_post = time.time()
+            if shouldPost(time_on_last_IV_monitor_post, IV_CHECK_INTERVALI_IN_SECONDS) and (isNowInTimePeriod(dt_time(16, 30, 0), dt_time(18, 30, 0), current_time)):
+                await IV_monitor_bot.main(args)
+                IV_monitor_bot = time.time()
         if shouldPost(time_on_last_trade_monitor_post, STOCK_TRADE_MONITOR_POST_INTERVAL_IN_SECONDS):
             await tweet_monitor_bot.main(args)
             time_on_last_trade_monitor_post = time.time()

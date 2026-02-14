@@ -1,16 +1,8 @@
 import time
 import argparse
 import asyncio
-from enum import Enum
-from typing import TypedDict
-
-from bs4 import BeautifulSoup
-
-from selenium import webdriver
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.chrome.options import Options
+from datetime import date, timedelta
+import requests
 
 from telegram import Bot
 
@@ -19,85 +11,57 @@ import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from common_tools import postTelegramNotification, saveObjectToDisk, loadObjectFromDisk
 
-URL = "https://www.nasdaq.com/market-activity/earnings/daily-earnings-surprise"
-
-EPS_DATA_PARENT_ELEMENT = "jupiter22-daily-earnings-surprise__data-container jupiter22-daily-earnings-surprise__data-container--exceeded loaded"
-ACCEPT_COOKIES_BUTTON = '#onetrust-accept-btn-handler'
-EPS_EXCEEDED_PARENT_ELEMENT = "daily-earnings-surprise__data"
-TABLE_PARENT_ELEMENT = 'nsdq-table-sort'
-SHADOW_ROOT_INSIDE_TABLE_PARENT_TRIGGER = "return arguments[0].shadowRoot.innerHTML"
-EPS_ITEM_ELEMENT = "table-row"
-EPS_ITEM_COMPANY_DETAIL_ELEMENT = "table-cell fixed-column-size- text-align-left"
-EPS_ITEM_EPS_DETAIL_ELEMENT = "table-cell fixed-column-size- text-align-left"
-EPS_OBJECT_DISK_FILE_POSTFIX = "EPS_object"
-EPS_ITEMS_TO_FETCH = 5
+URL = "https://financialmodelingprep.com/stable/earnings-calendar?apikey="
 EPS_SURPRISE_THRESHOLD = 30
+        
+def getEPSItemsFrom(url, api_key):
+    
+    today = date.today()
+    yesterday = today - timedelta(days=1)
+    params = {
+        "from": yesterday,
+        "to": today
+    }
+    response = requests.get(f"{url}{api_key}", params=params)
+    if response.status_code == 200:
+        return response.json()
+    else:
+        print(f"Failed to fetch EPS items from URL={url} with return code={response.status_code}")
+        return None
 
-class EPSItem(TypedDict):
-    company_name: str
-    company_symbol: str
-    eps_surprise_percent: float
-        
-def parseEPSDataFrom(web_page):
-    print("Loading latest trade info")
-    chrome_options = Options()
-    #chrome_options.add_argument("--headless")
-    chrome_options.add_argument("--window-size=1920,1080")
-    chrome_options.add_argument("--disable-blink-features=AutomationControlled")
-    driver = webdriver.Chrome(options=chrome_options)
-    driver.execute_cdp_cmd("Network.setExtraHTTPHeaders", {"headers": {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Accept-Encoding": "gzip, deflate, br",
-        "Referer": "https://www.google.com/",
-        "Connection": "keep-alive"
-    }})
-    results = []
-    try:
-        driver.get(web_page)
-        wait = WebDriverWait(driver, 20)
-        cookiesButton = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, ACCEPT_COOKIES_BUTTON)))
-        cookiesButton.click()
-        
-        eps_exceeded_element = driver.find_element(By.CLASS_NAME, EPS_EXCEEDED_PARENT_ELEMENT)
-        eps_table_parent = eps_exceeded_element.find_element(By.TAG_NAME, TABLE_PARENT_ELEMENT)
-        shadow_root_html = driver.execute_script(SHADOW_ROOT_INSIDE_TABLE_PARENT_TRIGGER, eps_table_parent)
-        driver.quit()
-        soup = BeautifulSoup(shadow_root_html, "html.parser")
-        EPS_entries = soup.find_all("div", class_=EPS_ITEM_ELEMENT)[:5]
-        for elem in EPS_entries:
-            company_details_elems = elem.find_all("div", class_=EPS_ITEM_COMPANY_DETAIL_ELEMENT)
-            eps_surprise_percent_elem = elem.find_all("div", class_=EPS_ITEM_EPS_DETAIL_ELEMENT)[-1]
-            eps_surprise = float(eps_surprise_percent_elem.text.replace("\n", "").strip())
-            if eps_surprise > EPS_SURPRISE_THRESHOLD:
-                result: EPSItem = {
-                    "company_name": company_details_elems[1].text.replace("\n", ""),
-                    "company_symbol": company_details_elems[0].text.replace("\n", ""),
-                    "eps_surprise_percent": eps_surprise
-                }
-                results.append(result)
-    except Exception as e:
-        print(f"Failed to fetch EPS data from source with exception: {e} \n (this is likely due there are no EPS data populated for the day)")
-    return results
                 
 async def main(args):
     print("Running EPS monitor")
     telegram_bot = Bot(token=args.telegram_api_token)
-    eps_items_list = parseEPSDataFrom(URL)
-    for index, item in enumerate(eps_items_list):
+    eps_items = getEPSItemsFrom(URL, args.fmp_api_key)
+    if eps_items:
         previously_stored_eps_object = None
         try:
-            previously_stored_eps_object = loadObjectFromDisk(f"{index}_EPS_OBJECT_DISK_FILE_POSTFIX")
+            previously_stored_eps_object = loadObjectFromDisk(f"EPS_OBJECT_DISK_FILE")
         except: 
             pass
-        if not previously_stored_eps_object == item:
-            message = f"Found company: {item["company_name"]} ({item["company_symbol"]}) with EPS surprise of {item["eps_surprise_percent"]}%"
-            await postTelegramNotification(message, telegram_bot, args.telegram_notification_group_id)
-            saveObjectToDisk(item, f"{index}_EPS_OBJECT_DISK_FILE_POSTFIX")
-    
+        if previously_stored_eps_object == eps_items:
+            return
+        else:
+            print(f"New items on EPS items, storing to disk")
+            saveObjectToDisk(eps_items, f"EPS_OBJECT_DISK_FILE")
+        for item in eps_items:
+            actual_eps = item["epsActual"]
+            estimated_eps = item["epsEstimated"]
+            if actual_eps is None or estimated_eps is None:
+                continue
+            eps_diff_abs = actual_eps - estimated_eps
+            if estimated_eps != 0:
+                eps_surprise_percent = (eps_diff_abs / abs(estimated_eps)) * 100
+            else:
+                eps_surprise_percent = eps_diff_abs * 100
+            if eps_surprise_percent >= EPS_SURPRISE_THRESHOLD:
+                message = f"Found company: {item["symbol"]} with EPS surprise of {eps_surprise_percent}%"
+                await postTelegramNotification(message, telegram_bot, args.telegram_notification_group_id)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser("EPS_monitor")
+    parser.add_argument('--fmp_api_key', required=True)
     parser.add_argument('--telegram_api_token', required=True)
     parser.add_argument('--telegram_notification_group_id', required=True)
     args = parser.parse_args()

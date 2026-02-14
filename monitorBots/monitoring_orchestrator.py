@@ -12,7 +12,7 @@ import IV_monitor_bot
 STOCK_MOVERS_POST_INTERVAL_IN_SECONDS = 900
 STOCK_NEWS_POST_INTERVAL_IN_SECONDS = 900
 STOCK_TRADE_MONITOR_POST_INTERVAL_IN_SECONDS = 3600
-EPS_CHECK_INTERVAL_IN_SECONDS = 5400
+EPS_CHECK_INTERVAL_IN_SECONDS = 1800
 IV_CHECK_INTERVALI_IN_SECONDS = 900
 
 parser = argparse.ArgumentParser("stock_monitor")
@@ -20,6 +20,7 @@ parser.add_argument('--telegram_api_token', required=True)
 parser.add_argument('--telegram_notification_group_id', required=True)
 parser.add_argument('--twitter_API_token', required=True)
 parser.add_argument('--twitter_user_handle', required=True, help='The twitter handle to poll')
+parser.add_argument('--fmp_api_key', required=True)
 parser.add_argument("--mode", choices=["premarket", "market", "postmarket"], required=False)
 parser.add_argument('--single_run', dest='single_run', default=True, action=argparse.BooleanOptionalAction)
 args = parser.parse_args()

@@ -9,7 +9,7 @@ from telegram import Bot
 import sys
 import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-from common_tools import postTelegramNotification
+from bot_common_tools import postTelegramNotification
     
 async def main(args):
     print("Running mail notification monitor")

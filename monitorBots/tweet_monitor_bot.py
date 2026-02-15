@@ -7,7 +7,7 @@ import requests
 from telegram import Bot
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-from common_tools import postTelegramNotification, saveObjectToDisk, loadObjectFromDisk
+from bot_common_tools import postTelegramNotification, saveObjectToDisk, loadObjectFromDisk
 
 TWEET_MONITOR_DISK_FILE_NAME = "TWEET_MONITOR_LAST_TWEET"
 async def main(args):

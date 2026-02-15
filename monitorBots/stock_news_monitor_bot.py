@@ -26,7 +26,7 @@ from telegram import Bot
 import sys
 import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-from common_tools import postTelegramNotification, saveObjectToDisk, loadObjectFromDisk
+from bot_common_tools import postTelegramNotification, saveObjectToDisk, loadObjectFromDisk
 
 
 NEWS_ITEMS_TO_FETCH_PER_TICKER = 1

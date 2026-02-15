@@ -22,7 +22,7 @@ from huggingface_hub import snapshot_download
 import sys
 import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-from common_tools import postTelegramNotification, saveObjectToDisk, loadObjectFromDisk
+from bot_common_tools import postTelegramNotification, saveObjectToDisk, loadObjectFromDisk
 
 JSON_TRADE_DATE_KEY = "DATE"
 JSON_COMPANY_SYMBOL = "SYMBOL"

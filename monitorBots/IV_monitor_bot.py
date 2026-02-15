@@ -8,7 +8,7 @@ from typing import TypedDict
 import sys
 import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-from common_tools import postTelegramNotification
+from bot_common_tools import postTelegramNotification
 
 IV_STATS_URL = "https://optioncharts.io/trending/highest-implied-volatility-stock-tickers"
 IV_STATS_TABLE_NAME = "table.table-sm.table-hover"

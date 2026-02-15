@@ -6,6 +6,7 @@ langchain_core==0.3.65
 langchain_ollama==0.3.3
 langchain_text_splitters==0.3.8
 langgraph==0.4.8
+playwright==1.58.0
 python-telegram-bot==22.1
 pytz==2025.2
 Requests==2.32.4

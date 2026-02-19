@@ -26,7 +26,7 @@ async def main(args):
             company_name = item["shortName"]
             stock_symbol = item["symbol"]
             market_change = item["regularMarketChangePercent"]
-            if market_change is not None and abs(market_change) > MARKET_CHANGE_PERCENT_THRESHOLD:
+            if market_change is not None and abs(market_change) > MARKET_CHANGE_PERCENT_THRESHOLD_BIG:
                 message = f"Found loser with large change: {company_name} ({stock_symbol}), market change: {market_change} %"
                 print("posting the notification")
                 await postTelegramNotification(message, telegram_bot, args.telegram_notification_group_id)
@@ -43,7 +43,7 @@ async def main(args):
         market_to_check = "premarket_change" if args.mode == "premarket" else "postmarket_change"
         _, losers_df = premarket_losers = (Query()
             .select(market_to_check)
-            .where(col('market_cap_basic') > (HUNDRED_MILLION * 0.5))
+            .where(col('market_cap_basic') > (HUNDRED_MILLION * 5))
             .order_by(market_to_check, ascending=True)
             .limit(5)
             .get_scanner_data()
@@ -58,13 +58,13 @@ async def main(args):
             for index, loser in losers_df.iterrows():
                 company_symbol = loser.iloc[0]
                 market_change_percent = loser.iloc[1]
-                if market_change_percent is not None and abs(market_change_percent) > MARKET_CHANGE_PERCENT_THRESHOLD:
+                if market_change_percent is not None and abs(market_change_percent) > MARKET_CHANGE_PERCENT_THRESHOLD_BIG:
                     message = f"Found loser with large change: {company_symbol}, {market_to_check} change: {market_change_percent}%"
                     print("posting the notification")
                     await postTelegramNotification(message, telegram_bot, args.telegram_notification_group_id)
         _, gainers_df = premarket_gainers = (Query()
             .select(market_to_check)
-            .where(col('market_cap_basic') > (HUNDRED_MILLION * 0.5))
+            .where(col('market_cap_basic') > (HUNDRED_MILLION * 5))
             .order_by(market_to_check, ascending=False)
             .limit(5)
             .get_scanner_data()

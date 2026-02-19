@@ -39,7 +39,7 @@ async def main(args):
         tweet_content = tweet.get("text", "No tweet found")
         previously_stored_tweet = None
         try:
-            previously_stored_tweet = loadObjectFromDisk(tweet_content)
+            previously_stored_tweet = loadObjectFromDisk(TWEET_MONITOR_DISK_FILE_NAME)
         except: 
             pass
         do_post_latest_tweet = True if not tweet_content == previously_stored_tweet else False

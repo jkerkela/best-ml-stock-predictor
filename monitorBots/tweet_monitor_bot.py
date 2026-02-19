@@ -22,7 +22,7 @@ async def main(args):
 
     if user_response.status_code != 200:
         print("Error getting user ID:", user_response.status_code, user_response.text)
-        exit()
+        return
 
     user_id = user_response.json()["data"]["id"]
     tweet_url = f"https://api.twitter.com/2/users/{user_id}/tweets"

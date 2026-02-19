@@ -9,8 +9,10 @@ from telegram import Bot
 import sys
 import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-from bot_common_tools import postTelegramNotification
+from bot_common_tools import postTelegramNotification, saveObjectToDisk, loadObjectFromDisk
 
+LOSERS_STORED_OBJECT_PREFIX = "MOVERS_LOSER_ITEMS"
+GAINERS_STORED_OBJECT_PREFIX = "MOVERS_GAINER_ITEMS"
 MARKET_CHANGE_PERCENT_THRESHOLD = 10
 MARKET_CHANGE_PERCENT_THRESHOLD_BIG = 30
 HUNDRED_MILLION = 100000000
@@ -46,13 +48,20 @@ async def main(args):
             .limit(5)
             .get_scanner_data()
         )
-        for index, loser in losers_df.iterrows():
-            company_symbol = loser.iloc[0]
-            market_change_percent = loser.iloc[1]
-            if market_change_percent is not None and abs(market_change_percent) > MARKET_CHANGE_PERCENT_THRESHOLD:
-                message = f"Found loser with large change: {company_symbol}, {market_to_check} change: {market_change_percent}%"
-                print("posting the notification")
-                await postTelegramNotification(message, telegram_bot, args.telegram_notification_group_id)
+        previously_stored_losers = None
+        try:
+            previously_stored_losers = loadObjectFromDisk(LOSERS_STORED_OBJECT_PREFIX)
+        except: 
+            pass
+        if previously_stored_losers != losers_df:
+            saveObjectToDisk(gainers_df, LOSERS_STORED_OBJECT_PREFIX)
+            for index, loser in losers_df.iterrows():
+                company_symbol = loser.iloc[0]
+                market_change_percent = loser.iloc[1]
+                if market_change_percent is not None and abs(market_change_percent) > MARKET_CHANGE_PERCENT_THRESHOLD:
+                    message = f"Found loser with large change: {company_symbol}, {market_to_check} change: {market_change_percent}%"
+                    print("posting the notification")
+                    await postTelegramNotification(message, telegram_bot, args.telegram_notification_group_id)
         _, gainers_df = premarket_gainers = (Query()
             .select(market_to_check)
             .where(col('market_cap_basic') > (HUNDRED_MILLION * 0.5))
@@ -60,13 +69,20 @@ async def main(args):
             .limit(5)
             .get_scanner_data()
         )
-        for index, gainer in gainers_df.iterrows():
-            company_symbol = gainer.iloc[0]
-            market_change_percent = gainer.iloc[1]
-            if market_change_percent is not None and abs(market_change_percent) > MARKET_CHANGE_PERCENT_THRESHOLD:
-                message = f"Found gainer with large change: {company_symbol}, {market_to_check} change: {market_change_percent}%"
-                print("posting the notification")
-                await postTelegramNotification(message, telegram_bot, args.telegram_notification_group_id)
+        previously_stored_gainers = None
+        try:
+            previously_stored_gainers = loadObjectFromDisk(GAINERS_STORED_OBJECT_PREFIX)
+        except: 
+            pass
+        if previously_stored_gainers != gainers_df:
+            saveObjectToDisk(gainers_df, GAINERS_STORED_OBJECT_PREFIX)
+            for index, gainer in gainers_df.iterrows():
+                company_symbol = gainer.iloc[0]
+                market_change_percent = gainer.iloc[1]
+                if market_change_percent is not None and abs(market_change_percent) > MARKET_CHANGE_PERCENT_THRESHOLD:
+                    message = f"Found gainer with large change: {company_symbol}, {market_to_check} change: {market_change_percent}%"
+                    print("posting the notification")
+                    await postTelegramNotification(message, telegram_bot, args.telegram_notification_group_id)
             
     
 if __name__ == "__main__":

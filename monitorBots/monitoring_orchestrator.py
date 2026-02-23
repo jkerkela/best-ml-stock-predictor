@@ -49,6 +49,7 @@ async def main():
         if is_weekday():
             tz = pytz.timezone('US/Eastern') 
             current_time = datetime.now(tz).time()
+            print(f"Current time in target timezone={current_time}")
             if shouldPost(time_on_last_premarket_movers_post, STOCK_MOVERS_POST_INTERVAL_IN_SECONDS) and isNowInTimePeriod(dt_time(4, 00, 0), dt_time(9, 30, 0), current_time):
                 args.mode = "premarket"
                 await stock_movers_monitor_bot.main(args)

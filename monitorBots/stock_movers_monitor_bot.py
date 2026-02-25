@@ -53,7 +53,7 @@ async def main(args):
             previously_stored_losers = loadObjectFromDisk(LOSERS_STORED_OBJECT_PREFIX)
         except: 
             pass
-        if previously_stored_losers != losers_df:
+        if previously_stored_losers and previously_stored_losers.equals(losers_df):
             saveObjectToDisk(gainers_df, LOSERS_STORED_OBJECT_PREFIX)
             for index, loser in losers_df.iterrows():
                 company_symbol = loser.iloc[0]
@@ -74,7 +74,7 @@ async def main(args):
             previously_stored_gainers = loadObjectFromDisk(GAINERS_STORED_OBJECT_PREFIX)
         except: 
             pass
-        if previously_stored_gainers != gainers_df:
+        if previously_stored_gainers and previously_stored_gainers.equals(gainers_df):
             saveObjectToDisk(gainers_df, GAINERS_STORED_OBJECT_PREFIX)
             for index, gainer in gainers_df.iterrows():
                 company_symbol = gainer.iloc[0]

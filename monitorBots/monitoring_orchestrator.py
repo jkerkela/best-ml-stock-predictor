@@ -67,7 +67,7 @@ async def main():
                 time_on_last_EPS_monitor_post = time.time()
             if shouldPost(time_on_last_IV_monitor_post, IV_CHECK_INTERVALI_IN_SECONDS) and (isNowInTimePeriod(dt_time(9, 30, 0), dt_time(11, 30, 0), current_time)):
                 await IV_monitor_bot.main(args)
-                IV_monitor_bot = time.time()
+                time_on_last_IV_monitor_post = time.time()
         if shouldPost(time_on_last_trade_monitor_post, STOCK_TRADE_MONITOR_POST_INTERVAL_IN_SECONDS):
             await tweet_monitor_bot.main(args)
             time_on_last_trade_monitor_post = time.time()

@@ -10,10 +10,9 @@ import eps_monitor_bot
 import IV_monitor_bot
 
 STOCK_MOVERS_POST_INTERVAL_IN_SECONDS = 3600
-STOCK_NEWS_POST_INTERVAL_IN_SECONDS = 900
 STOCK_TRADE_MONITOR_POST_INTERVAL_IN_SECONDS = 3600
 EPS_CHECK_INTERVAL_IN_SECONDS = 1800
-IV_CHECK_INTERVALI_IN_SECONDS = 900
+IV_CHECK_INTERVALI_IN_SECONDS = 3600
 
 parser = argparse.ArgumentParser("stock_monitor")
 parser.add_argument('--telegram_api_token', required=True)
@@ -65,7 +64,7 @@ async def main():
             if shouldPost(time_on_last_EPS_monitor_post, EPS_CHECK_INTERVAL_IN_SECONDS) and (isNowInTimePeriod(dt_time(4, 0, 0), dt_time(9, 30, 0), current_time) or isNowInTimePeriod(dt_time(16, 0, 0), dt_time(20, 0, 0), current_time)):
                 await eps_monitor_bot.main(args)
                 time_on_last_EPS_monitor_post = time.time()
-            if shouldPost(time_on_last_IV_monitor_post, IV_CHECK_INTERVALI_IN_SECONDS) and (isNowInTimePeriod(dt_time(9, 30, 0), dt_time(11, 30, 0), current_time)):
+            if shouldPost(time_on_last_IV_monitor_post, IV_CHECK_INTERVALI_IN_SECONDS) and (isNowInTimePeriod(dt_time(9, 30, 0), dt_time(11, 30, 0), current_time) or isNowInTimePeriod(dt_time(15, 30, 0), dt_time(16, 0, 0), current_time)):
                 await IV_monitor_bot.main(args)
                 time_on_last_IV_monitor_post = time.time()
         if shouldPost(time_on_last_trade_monitor_post, STOCK_TRADE_MONITOR_POST_INTERVAL_IN_SECONDS):

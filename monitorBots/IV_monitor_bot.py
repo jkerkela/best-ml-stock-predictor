@@ -73,3 +73,6 @@ if __name__ == "__main__":
         asyncio.run(main(args))
     except KeyboardInterrupt:
         pass
+    except Exception as e:
+        print(f"Failed to execute IV monitor with error={e}")
+        

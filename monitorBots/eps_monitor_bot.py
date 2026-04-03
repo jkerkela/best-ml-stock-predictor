@@ -41,6 +41,7 @@ async def main(args):
         except: 
             pass
         if previously_stored_eps_object == eps_items:
+            print(f"No new EPS items, skipping analysis")
             return
         else:
             print(f"New items on EPS items, storing to disk")

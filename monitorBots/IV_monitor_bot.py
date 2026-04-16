@@ -20,7 +20,7 @@ IV_30D_COLUMN = 3
 OPEN_INTEREST_COLUMN = 5
 
 IV_RANK_LIMIT = 90.0      
-OPEN_INTEREST_LIMIT = 1_500_000
+OPEN_INTEREST_LIMIT = 1_000_000
 
 class IVItem(TypedDict):
     company_name: str

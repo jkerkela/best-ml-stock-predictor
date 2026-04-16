@@ -12,7 +12,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from bot_common_tools import postTelegramNotification, saveObjectToDisk, loadObjectFromDisk
 
 URL = "https://financialmodelingprep.com/stable/earnings-calendar?apikey="
-EPS_SURPRISE_THRESHOLD = 30
+EPS_SURPRISE_THRESHOLD = 20
         
 def getEPSItemsFrom(url, api_key):
     

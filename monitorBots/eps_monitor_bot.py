@@ -1,7 +1,8 @@
 import time
 import argparse
 import asyncio
-from datetime import date, timedelta
+from datetime import datetime, timedelta
+import pytz
 import requests
 
 from telegram import Bot
@@ -13,16 +14,19 @@ from bot_common_tools import postTelegramNotification, saveObjectToDisk, loadObj
 
 URL = "https://financialmodelingprep.com/stable/earnings-calendar?apikey="
 EPS_SURPRISE_THRESHOLD = 20
-        
+
+# Same timezone as the orchestrator uses for scheduling
+EASTERN_TZ = pytz.timezone('US/Eastern')
+
 def getEPSItemsFrom(url, api_key):
-    
-    today = date.today()
+
+    today = datetime.now(EASTERN_TZ).date()
     yesterday = today - timedelta(days=1)
     params = {
         "from": yesterday,
         "to": today
     }
-    response = requests.get(f"{url}{api_key}", params=params)
+    response = requests.get(f"{url}{api_key}", params=params, timeout=30)
     if response.status_code == 200:
         return response.json()
     else:
@@ -35,21 +39,21 @@ async def main(args):
     telegram_bot = Bot(token=args.telegram_api_token)
     eps_items = getEPSItemsFrom(URL, args.fmp_api_key)
     if eps_items:
-        previously_stored_eps_object = None
+        notified_items = set()
         try:
-            previously_stored_eps_object = loadObjectFromDisk(f"EPS_OBJECT_DISK_FILE")
-        except: 
+            notified_items = loadObjectFromDisk("EPS_NOTIFIED_ITEMS_DISK_FILE")
+        except FileNotFoundError:
             pass
-        if previously_stored_eps_object == eps_items:
-            print(f"No new EPS items, skipping analysis")
-            return
-        else:
-            print(f"New items on EPS items, storing to disk")
-            saveObjectToDisk(eps_items, f"EPS_OBJECT_DISK_FILE")
+        # Entries older than the query window (yesterday-today) can never match again, prune them
+        yesterday = datetime.now(EASTERN_TZ).date() - timedelta(days=1)
+        notified_items = {k for k in notified_items if k[1] >= str(yesterday)}
         for item in eps_items:
             actual_eps = item["epsActual"]
             estimated_eps = item["epsEstimated"]
             if actual_eps is None or estimated_eps is None:
+                continue
+            item_key = (item["symbol"], item["date"])
+            if item_key in notified_items:
                 continue
             eps_diff_abs = actual_eps - estimated_eps
             if estimated_eps != 0:
@@ -58,7 +62,9 @@ async def main(args):
                 eps_surprise_percent = eps_diff_abs * 100
             if eps_surprise_percent >= EPS_SURPRISE_THRESHOLD:
                 message = f"Found company: {item["symbol"]} with EPS surprise of {eps_surprise_percent}%"
-                await postTelegramNotification(message, telegram_bot, args.telegram_notification_group_id)
+                if await postTelegramNotification(message, telegram_bot, args.telegram_notification_group_id):
+                    notified_items.add(item_key)
+                    saveObjectToDisk(notified_items, "EPS_NOTIFIED_ITEMS_DISK_FILE")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser("EPS_monitor")

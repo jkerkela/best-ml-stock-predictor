@@ -1,5 +1,7 @@
 import argparse
 import asyncio
+from datetime import datetime
+import pytz
 
 from playwright.async_api import async_playwright
 from telegram import Bot
@@ -8,7 +10,7 @@ from typing import TypedDict
 import sys
 import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-from bot_common_tools import postTelegramNotification
+from bot_common_tools import postTelegramNotification, saveObjectToDisk, loadObjectFromDisk
 
 IV_STATS_URL = "https://optioncharts.io/trending/high-iv-rank-all"
 IV_STATS_TABLE_NAME = "table.table-sm.table-hover"
@@ -19,8 +21,11 @@ IV_RANK_COLUMN = 2
 IV_30D_COLUMN = 3
 OPEN_INTEREST_COLUMN = 5
 
-IV_RANK_LIMIT = 90.0      
+IV_RANK_LIMIT = 90.0
 OPEN_INTEREST_LIMIT = 1_000_000
+
+# Same timezone as the orchestrator uses for scheduling
+EASTERN_TZ = pytz.timezone('US/Eastern')
 
 class IVItem(TypedDict):
     company_name: str
@@ -33,45 +38,46 @@ async def parseIVDataFrom(URL):
     high_iv_items = []
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
-        page = await browser.new_page()
-        
-        print(f"Reading IV Rank stats from URL: {URL}")
-        await page.goto(URL)
-        
-        # Wait for the specific table to load
-        await page.wait_for_selector(IV_STATS_TABLE_NAME)
-        
-        rows = await page.locator(f"{IV_STATS_TABLE_NAME} tr").all()
-        
-        for row in rows:
-            data = await row.locator("td").all_inner_texts()
-            # Ensure the row has enough columns and isn't a header/empty
-            if data and len(data) > OPEN_INTEREST_COLUMN:
-                try:
-                    oi_raw = data[OPEN_INTEREST_COLUMN].replace(',', '').strip()
-                    ivr_raw = data[IV_RANK_COLUMN].replace('%', '').strip()
-                    iv30_raw = data[IV_30D_COLUMN].replace('%', '').strip()
+        try:
+            page = await browser.new_page()
 
-                    open_interest_value = int(oi_raw) if oi_raw else 0
-                    iv_rank_percent = float(ivr_raw) if ivr_raw else 0.0
-                    iv_30d_percent = float(iv30_raw) if iv30_raw else 0.0
+            print(f"Reading IV Rank stats from URL: {URL}")
+            await page.goto(URL)
 
-                    if open_interest_value > OPEN_INTEREST_LIMIT and iv_rank_percent > IV_RANK_LIMIT:
-                        print(f"Found: {data[COMPANY_SYMBOL_COLUMN]} | IV Rank: {iv_rank_percent}% | OI: {open_interest_value}")
-                        
-                        result_item: IVItem = {
-                            "company_name": data[COMPANY_NAME_COLUMN],
-                            "company_symbol": data[COMPANY_SYMBOL_COLUMN],
-                            "iv_rank": iv_rank_percent,
-                            "iv_30d": iv_30d_percent,
-                            "open_interest": open_interest_value
-                        }
-                        high_iv_items.append(result_item)
-                except (ValueError, IndexError) as e:
-                    print(f"Excountered unexoected item in IV rankings, skipping. {e}")
-                    continue 
-                    
-        await browser.close()
+            # Wait for the specific table to load
+            await page.wait_for_selector(IV_STATS_TABLE_NAME)
+
+            rows = await page.locator(f"{IV_STATS_TABLE_NAME} tr").all()
+
+            for row in rows:
+                data = await row.locator("td").all_inner_texts()
+                # Ensure the row has enough columns and isn't a header/empty
+                if data and len(data) > OPEN_INTEREST_COLUMN:
+                    try:
+                        oi_raw = data[OPEN_INTEREST_COLUMN].replace(',', '').strip()
+                        ivr_raw = data[IV_RANK_COLUMN].replace('%', '').strip()
+                        iv30_raw = data[IV_30D_COLUMN].replace('%', '').strip()
+
+                        open_interest_value = int(oi_raw) if oi_raw else 0
+                        iv_rank_percent = float(ivr_raw) if ivr_raw else 0.0
+                        iv_30d_percent = float(iv30_raw) if iv30_raw else 0.0
+
+                        if open_interest_value > OPEN_INTEREST_LIMIT and iv_rank_percent > IV_RANK_LIMIT:
+                            print(f"Found: {data[COMPANY_SYMBOL_COLUMN]} | IV Rank: {iv_rank_percent}% | OI: {open_interest_value}")
+
+                            result_item: IVItem = {
+                                "company_name": data[COMPANY_NAME_COLUMN],
+                                "company_symbol": data[COMPANY_SYMBOL_COLUMN],
+                                "iv_rank": iv_rank_percent,
+                                "iv_30d": iv_30d_percent,
+                                "open_interest": open_interest_value
+                            }
+                            high_iv_items.append(result_item)
+                    except (ValueError, IndexError) as e:
+                        print(f"Encountered unexpected item in IV rankings, skipping. {e}")
+                        continue
+        finally:
+            await browser.close()
     return high_iv_items
     
 async def main(args):
@@ -82,7 +88,20 @@ async def main(args):
         print("No tickers matched the criteria.")
         return
 
+    notified_items = set()
+    try:
+        notified_items = loadObjectFromDisk("IV_NOTIFIED_ITEMS_DISK_FILE")
+    except FileNotFoundError:
+        pass
+    # Flush posted entries from previous days so each ticker can alert again on a new day
+    today = str(datetime.now(EASTERN_TZ).date())
+    notified_items = {k for k in notified_items if k[1] == today}
+
     for item in high_iv_items:
+        item_key = (item["company_symbol"], today)
+        if item_key in notified_items:
+            print(f"Already notified about {item['company_symbol']} today, skipping")
+            continue
         message = (
             f"🚀 **High IV Rank Alert**\n"
             f"Stock: {item['company_name']} ({item['company_symbol']})\n"
@@ -90,7 +109,9 @@ async def main(args):
             f"IV (30d): {item['iv_30d']}%\n"
             f"Open Interest: {item['open_interest']:,}"
         )
-        await postTelegramNotification(message, telegram_bot, args.telegram_notification_group_id)
+        if await postTelegramNotification(message, telegram_bot, args.telegram_notification_group_id):
+            notified_items.add(item_key)
+            saveObjectToDisk(notified_items, "IV_NOTIFIED_ITEMS_DISK_FILE")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser("IV_Rank_monitor")

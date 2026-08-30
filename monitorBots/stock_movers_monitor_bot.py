@@ -1,5 +1,7 @@
 import argparse
 import asyncio
+from datetime import datetime
+import pytz
 
 import yfinance as yf
 from tradingview_screener import Query, col
@@ -11,80 +13,74 @@ import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from bot_common_tools import postTelegramNotification, saveObjectToDisk, loadObjectFromDisk
 
-LOSERS_STORED_OBJECT_PREFIX = "MOVERS_LOSER_ITEMS"
-GAINERS_STORED_OBJECT_PREFIX = "MOVERS_GAINER_ITEMS"
+NOTIFIED_ITEMS_DISK_FILE = "MOVERS_NOTIFIED_ITEMS_DISK_FILE"
 MARKET_CHANGE_PERCENT_THRESHOLD = 10
-MARKET_CHANGE_PERCENT_THRESHOLD_BIG = 30
+MARKET_CHANGE_PERCENT_THRESHOLD_BIG = 20
 HUNDRED_MILLION = 100000000
-                
+
+# Same timezone as the orchestrator uses for scheduling
+EASTERN_TZ = pytz.timezone('US/Eastern')
+
+def loadNotifiedItems():
+    notified_items = set()
+    try:
+        notified_items = loadObjectFromDisk(NOTIFIED_ITEMS_DISK_FILE)
+    except FileNotFoundError:
+        pass
+    # Flush posted entries from previous days so each ticker can alert again on a new day
+    today = str(datetime.now(EASTERN_TZ).date())
+    return {k for k in notified_items if k[2] == today}, today
+
+def getMarketMovers(screen_name):
+    result = yf.screen(screen_name, count=5)
+    return [(item["symbol"], item.get("shortName"), item.get("regularMarketChangePercent"))
+            for item in result["quotes"]]
+
+def getExtendedHoursMovers(market_to_check, ascending):
+    _, movers_df = (Query()
+        .select(market_to_check)
+        .where(col('market_cap_basic') > (HUNDRED_MILLION * 5))
+        .order_by(market_to_check, ascending=ascending)
+        .limit(5)
+        .get_scanner_data()
+    )
+    return [(row.iloc[0], None, row.iloc[1]) for _, row in movers_df.iterrows()]
+
+async def notifyMovers(movers, mover_label, change_label, threshold, notified_items, today, telegram_bot, args):
+    for stock_symbol, company_name, market_change_percent in movers:
+        if market_change_percent is None or abs(market_change_percent) <= threshold:
+            continue
+        item_key = (stock_symbol, args.mode, today)
+        if item_key in notified_items:
+            print(f"Already notified about {stock_symbol} in {args.mode} mode today, skipping")
+            continue
+        display_name = f"{company_name} ({stock_symbol})" if company_name else stock_symbol
+        message = f"Found {mover_label} with large change: {display_name}, {change_label} change: {market_change_percent:.1f}%"
+        print("posting the notification")
+        if await postTelegramNotification(message, telegram_bot, args.telegram_notification_group_id):
+            notified_items.add(item_key)
+            saveObjectToDisk(notified_items, NOTIFIED_ITEMS_DISK_FILE)
+
 async def main(args):
     print("Running stock movers monitor")
     telegram_bot = Bot(token=args.telegram_api_token)
+    notified_items, today = loadNotifiedItems()
     if args.mode == "market":
-        daily_losers_res = yf.screen('day_losers', count=5)
-        for item in daily_losers_res["quotes"]:
-            company_name = item["shortName"]
-            stock_symbol = item["symbol"]
-            market_change = item["regularMarketChangePercent"]
-            if market_change is not None and abs(market_change) > MARKET_CHANGE_PERCENT_THRESHOLD_BIG:
-                message = f"Found loser with large change: {company_name} ({stock_symbol}), market change: {market_change} %"
-                print("posting the notification")
-                await postTelegramNotification(message, telegram_bot, args.telegram_notification_group_id)
-        daily_gainers_res = yf.screen('day_gainers', count=5)
-        for item in daily_gainers_res["quotes"]:
-            company_name = item["shortName"]
-            stock_symbol = item["symbol"]
-            market_change = item["regularMarketChangePercent"]
-            if market_change is not None and abs(market_change) > MARKET_CHANGE_PERCENT_THRESHOLD_BIG:
-                message = f"Found gainer with large change: {company_name} ({stock_symbol}), market change: {market_change} %"
-                print("posting the notification")
-                await postTelegramNotification(message, telegram_bot, args.telegram_notification_group_id)
+        losers = getMarketMovers('day_losers')
+        gainers = getMarketMovers('day_gainers')
+        change_label = "market"
+        gainer_threshold = MARKET_CHANGE_PERCENT_THRESHOLD_BIG
     else:
         market_to_check = "premarket_change" if args.mode == "premarket" else "postmarket_change"
-        _, losers_df = premarket_losers = (Query()
-            .select(market_to_check)
-            .where(col('market_cap_basic') > (HUNDRED_MILLION * 5))
-            .order_by(market_to_check, ascending=True)
-            .limit(5)
-            .get_scanner_data()
-        )
-        previously_stored_losers = None
-        try:
-            previously_stored_losers = loadObjectFromDisk(LOSERS_STORED_OBJECT_PREFIX)
-        except: 
-            pass
-        if previously_stored_losers and previously_stored_losers.equals(losers_df):
-            saveObjectToDisk(gainers_df, LOSERS_STORED_OBJECT_PREFIX)
-            for index, loser in losers_df.iterrows():
-                company_symbol = loser.iloc[0]
-                market_change_percent = loser.iloc[1]
-                if market_change_percent is not None and abs(market_change_percent) > MARKET_CHANGE_PERCENT_THRESHOLD_BIG:
-                    message = f"Found loser with large change: {company_symbol}, {market_to_check} change: {market_change_percent}%"
-                    print("posting the notification")
-                    await postTelegramNotification(message, telegram_bot, args.telegram_notification_group_id)
-        _, gainers_df = premarket_gainers = (Query()
-            .select(market_to_check)
-            .where(col('market_cap_basic') > (HUNDRED_MILLION * 5))
-            .order_by(market_to_check, ascending=False)
-            .limit(5)
-            .get_scanner_data()
-        )
-        previously_stored_gainers = None
-        try:
-            previously_stored_gainers = loadObjectFromDisk(GAINERS_STORED_OBJECT_PREFIX)
-        except: 
-            pass
-        if previously_stored_gainers and previously_stored_gainers.equals(gainers_df):
-            saveObjectToDisk(gainers_df, GAINERS_STORED_OBJECT_PREFIX)
-            for index, gainer in gainers_df.iterrows():
-                company_symbol = gainer.iloc[0]
-                market_change_percent = gainer.iloc[1]
-                if market_change_percent is not None and abs(market_change_percent) > MARKET_CHANGE_PERCENT_THRESHOLD:
-                    message = f"Found gainer with large change: {company_symbol}, {market_to_check} change: {market_change_percent}%"
-                    print("posting the notification")
-                    await postTelegramNotification(message, telegram_bot, args.telegram_notification_group_id)
-            
-    
+        losers = getExtendedHoursMovers(market_to_check, ascending=True)
+        gainers = getExtendedHoursMovers(market_to_check, ascending=False)
+        change_label = args.mode
+        gainer_threshold = MARKET_CHANGE_PERCENT_THRESHOLD
+    await notifyMovers(losers, "loser", change_label, MARKET_CHANGE_PERCENT_THRESHOLD_BIG,
+                       notified_items, today, telegram_bot, args)
+    await notifyMovers(gainers, "gainer", change_label, gainer_threshold,
+                       notified_items, today, telegram_bot, args)
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser("stock_movers_monitor")
     parser.add_argument('--telegram_api_token', required=True)

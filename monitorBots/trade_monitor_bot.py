@@ -1,5 +1,3 @@
-import os
-import time
 import argparse
 import asyncio
 import requests
@@ -7,7 +5,6 @@ from urllib.parse import urlparse
 from bs4 import BeautifulSoup
 import json
 import re
-import pickle
 
 from transformers import pipeline
 from huggingface_hub import login
@@ -16,8 +13,6 @@ from langchain_core.prompts import PromptTemplate
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from telegram import Bot
-
-from huggingface_hub import snapshot_download
 
 import sys
 import os
@@ -30,6 +25,7 @@ JSON_TRADE_SIZE= "SIZE"
 JSON_TRADE_TYPE = "TYPE"
 
 DISK_FILE_PREFIX_NAME_OF_LATEST_TRADE = "latest_trade"
+REQUEST_TIMEOUT_SECONDS = 30
 
 PROMPT = """
 INSTRUCTIONS: \n
@@ -40,7 +36,7 @@ REPLY ONLY WITH UPMOST TRADE AS JSON:\n
     "SYMBOL": "<company>",\n
     "TYPE": "<one of 'BUY', 'SELL'>",\n
     "SIZE": "<trade size>",\n
-    "DATE": "<date>",\n
+    "DATE": "<date>"\n
 }}\n
 
 DOCUMENT: \n
@@ -49,15 +45,26 @@ DOCUMENT: \n
 json:
 """
 
-        
+
 def loadDataSourceFromWeb(web_page):
     print("Loading latest trade info")
-    response = requests.get(web_page)
-    html_content = response.content
-    soup = BeautifulSoup(html_content, "html.parser")
+    response = requests.get(web_page, timeout=REQUEST_TIMEOUT_SECONDS)
+    if response.status_code != 200:
+        print(f"Failed to retrieve trade page, status code={response.status_code}")
+        return None
+    soup = BeautifulSoup(response.content, "html.parser")
     text = soup.get_text(separator="\n", strip=True)
     return Document(text)
-    
+
+def normalizeTrade(trade):
+    # Normalize LLM output formatting so the same trade always compares equal
+    for key in (JSON_COMPANY_SYMBOL, JSON_TRADE_TYPE):
+        if isinstance(trade.get(key), str):
+            trade[key] = trade[key].strip().upper()
+    if isinstance(trade.get(JSON_TRADE_SIZE), str):
+        trade[JSON_TRADE_SIZE] = trade[JSON_TRADE_SIZE].replace(",", "").replace(" ", "")
+    return trade
+
 def queryLatestTradeAsJson(llm, data):
     print("Querying latest stock trade from LLM")
     splitter = RecursiveCharacterTextSplitter(chunk_size=2000, chunk_overlap=0)
@@ -70,16 +77,21 @@ def queryLatestTradeAsJson(llm, data):
             match = re.search(r'(\{.*?\})', response[0].get("generated_text", ""), re.DOTALL)
             if match:
                 first_json_str = match.group(1)
-                parsed_json = json.loads(first_json_str)
-                return parsed_json
+                try:
+                    parsed_json = json.loads(first_json_str)
+                except json.JSONDecodeError as e:
+                    print(f"Failed to parse trade JSON with error: {e}, continuing parsing")
+                    continue
+                return normalizeTrade(parsed_json)
             else:
                 print("No valid JSON found, continuing parsing")
         else:
             print("Warning: Unexpected response format from LLM.")
     return None
-    
+
 async def main(args):
     print("Running stock trades monitor")
+    login(token=args.huggingface_api_key)
     model_name = "HuggingFaceTB/SmolLM2-1.7B-Instruct"
     llm = pipeline("text-generation",
         model=model_name, model_kwargs={"torch_dtype": "bfloat16"},
@@ -87,30 +99,31 @@ async def main(args):
         return_full_text=False
     )
     telegram_bot = Bot(token=args.telegram_api_token)
-    
+
     while True:
         source_data = loadDataSourceFromWeb(args.source_url_for_trades)
-        latest_trade = queryLatestTradeAsJson(llm, source_data)
-        
-        latest_saved_trade = None
-        parsed_url = urlparse(args.source_url_for_trades)
-        last_url_segment = parsed_url.path.rstrip('/').split('/')[-1]
-        try:
-            latest_saved_trade = loadObjectFromDisk(last_url_segment)
-        except: 
-            pass
-        do_post_latest_trade = True if not latest_trade == latest_saved_trade else False
-        if do_post_latest_trade:
-            complete_message = f"Found new trade from: {args.source_url_for_trades} as:\n {str(latest_trade)}"
-            if await postTelegramNotification(complete_message, telegram_bot, args.telegram_notification_group_id):
-                saveObjectToDisk(latest_trade, last_url_segment)
+        latest_trade = queryLatestTradeAsJson(llm, source_data) if source_data is not None else None
+        if latest_trade is None:
+            print("No trade information found on this cycle, skipping posting")
         else:
-            print("Latest trade already posted, skipping posting")
+            parsed_url = urlparse(args.source_url_for_trades)
+            last_url_segment = parsed_url.path.rstrip('/').split('/')[-1]
+            latest_saved_trade = None
+            try:
+                latest_saved_trade = loadObjectFromDisk(last_url_segment)
+            except FileNotFoundError:
+                pass
+            if latest_trade != latest_saved_trade:
+                complete_message = f"Found new trade from: {args.source_url_for_trades} as:\n {str(latest_trade)}"
+                if await postTelegramNotification(complete_message, telegram_bot, args.telegram_notification_group_id):
+                    saveObjectToDisk(latest_trade, last_url_segment)
+            else:
+                print("Latest trade already posted, skipping posting")
         if args.single_run:
             break
-        time.sleep(600)
+        await asyncio.sleep(600)
 
-    
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser("trading_activity_monitor")
     parser.add_argument('--huggingface_api_key', required=True)

@@ -30,29 +30,31 @@ from bot_common_tools import postTelegramNotification, saveObjectToDisk, loadObj
 
 
 NEWS_ITEMS_TO_FETCH_PER_TICKER = 1
+MAX_STORED_NEWS_ITEMS_PER_TICKER = 20
 SCRAPING_SOURCE_BASE_URL = "https://www.stocktitan.net"
 SCRAPING_SOURCE_NEWS_URL = SCRAPING_SOURCE_BASE_URL + "/news/"
 NEWS_ITEM_SUMMARY_ELEMENT = "companies-card-summary"
 NEWS_ITEM_URL_ELEMENT = "text-gray-dark feed-link"
 SENTIMENT_THRESHOLD = 0.8
+REQUEST_TIMEOUT_SECONDS = 30
 
 DISK_FILE_NAME_PREFIX = "stock_news_items"
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 RELEVANT_ARTICLE_JSON_KEY_NAME = "relevant"
-NEWS_ITEM_REVEVANCE_CHECK_PROMPT= """
+NEWS_ITEM_RELEVANCE_CHECK_PROMPT = """
 Check if the information in the context has potential impact to stock price of the company.
 Give answer in json format as:\n
 {{\n
-    "{key_name}": "<one of 'YES', 'NO'",\n
+    "{key_name}": "<one of 'YES', 'NO'>",\n
 }}\n
 
 Context: {context}\n
 
 json:
 """
-        
+
 class ItemStatus(Enum):
     CHECK_RELEVANCE = 1
     DO_SENTIMENT_ANALYSIS = 2
@@ -60,63 +62,67 @@ class ItemStatus(Enum):
     POSTED = 4
     IGNORE = 5
     UNDEFINED = 6
+    POST_FAILED = 7
 
 class NewsItem(TypedDict):
     news_url: str
     news_summary: str
     item_status: ItemStatus
     sentiment: Tuple[str, float]
-    
+
 class LLMState(TypedDict):
-    latest_fetched_news_per_ticker: dict[str, [NewsItem]]
-    
+    latest_fetched_news_per_ticker: dict[str, list[NewsItem]]
+    fetch_done: bool
+    next_stage: str
+
 
 def getLatestNewsItems(state: LLMState, tickers):
     print("Getting latest news items")
     try:
         state["latest_fetched_news_per_ticker"] = loadObjectFromDisk(DISK_FILE_NAME_PREFIX)
-    except: 
+    except FileNotFoundError:
         pass
+    for ticker, news_items in state["latest_fetched_news_per_ticker"].items():
+        # Cap stored history so the state file does not grow forever
+        state["latest_fetched_news_per_ticker"][ticker] = news_items[-MAX_STORED_NEWS_ITEMS_PER_TICKER:]
+        # Retry posts that failed on a previous run
+        for news_item in state["latest_fetched_news_per_ticker"][ticker]:
+            if news_item["item_status"] == ItemStatus.POST_FAILED:
+                news_item["item_status"] = ItemStatus.SENTIMENT_DONE
     for ticker in tickers:
         print(f"DEBUG: Getting latest news items for {ticker}")
         news_dir_url = SCRAPING_SOURCE_NEWS_URL + ticker
-        response = requests.get(news_dir_url)
+        response = requests.get(news_dir_url, timeout=REQUEST_TIMEOUT_SECONDS)
         if response.status_code != 200:
             print("Failed to retrieve page:", response.status_code)
             continue
         soup = BeautifulSoup(response.text, "html.parser")
         article_summaries = soup.find_all("div", class_=NEWS_ITEM_SUMMARY_ELEMENT)
         article_urls = soup.find_all("a", class_=NEWS_ITEM_URL_ELEMENT)
-        latest_article_summaries = article_summaries[:NEWS_ITEMS_TO_FETCH_PER_TICKER]
-        latest_article_urls = article_urls[:NEWS_ITEMS_TO_FETCH_PER_TICKER]
-        for index, url in enumerate(latest_article_urls):
+        latest_articles = list(zip(article_urls, article_summaries))[:NEWS_ITEMS_TO_FETCH_PER_TICKER]
+        stored_items = state["latest_fetched_news_per_ticker"].setdefault(ticker, [])
+        known_urls = {item["news_url"] for item in stored_items}
+        for url, summary in latest_articles:
             full_url = SCRAPING_SOURCE_BASE_URL + url['href']
-            summary_text = latest_article_summaries[index].get_text(separator=" ", strip=True)
-            if ticker in state["latest_fetched_news_per_ticker"]:
-                for news_item in state["latest_fetched_news_per_ticker"][ticker]:
-                    if news_item["news_url"] != full_url:
-                        news_item: NewsItem = {
-                            "news_url" : full_url,
-                            "news_summary" : summary_text, 
-                            "item_status" : ItemStatus.CHECK_RELEVANCE, 
-                            "sentiment" : ("undefined", 0)
-                        }
-                        state["latest_fetched_news_per_ticker"][ticker].append(news_item)
-            else:
-                news_item: NewsItem = {
-                    "news_url" : full_url,
-                    "news_summary" : summary_text, 
-                    "item_status" : ItemStatus.CHECK_RELEVANCE, 
-                    "sentiment" : ("undefined", 0)
-                }
-                state["latest_fetched_news_per_ticker"][ticker] = [news_item]
+            if full_url in known_urls:
+                continue
+            summary_text = summary.get_text(separator=" ", strip=True)
+            news_item: NewsItem = {
+                "news_url" : full_url,
+                "news_summary" : summary_text,
+                "item_status" : ItemStatus.CHECK_RELEVANCE,
+                "sentiment" : ("undefined", 0)
+            }
+            stored_items.append(news_item)
+            known_urls.add(full_url)
+    state["fetch_done"] = True
     saveObjectToDisk(state["latest_fetched_news_per_ticker"], DISK_FILE_NAME_PREFIX)
     return state
 
 #TODO: this can be combined to postNotification agentic step
 def checkNewsItemsRelevance(state: LLMState, relevance_check_llm):
     print("Filtering relevant news items")
-    rag_prompt = PromptTemplate.from_template(NEWS_ITEM_REVEVANCE_CHECK_PROMPT)
+    rag_prompt = PromptTemplate.from_template(NEWS_ITEM_RELEVANCE_CHECK_PROMPT)
     for ticker in state["latest_fetched_news_per_ticker"]:
         for news_item in state["latest_fetched_news_per_ticker"][ticker]:
             if news_item["item_status"] == ItemStatus.CHECK_RELEVANCE:
@@ -133,18 +139,18 @@ def checkNewsItemsRelevance(state: LLMState, relevance_check_llm):
                             news_item["item_status"] = ItemStatus.DO_SENTIMENT_ANALYSIS
                         else:
                             news_item["item_status"] = ItemStatus.IGNORE
-                    except json.JSONDecodeError as e:
-                        print(f"Error parsing the response with error: {e}")
+                    except (json.JSONDecodeError, KeyError) as e:
+                        # Generation is deterministic, retrying would fail the same way - drop the item
+                        print(f"Error parsing the response with error: {e}, ignoring the item")
+                        news_item["item_status"] = ItemStatus.IGNORE
                 else:
-                    print("Warning: Unexpected response format from LLM.")
+                    print("Warning: Unexpected response format from LLM, ignoring the item")
+                    news_item["item_status"] = ItemStatus.IGNORE
     saveObjectToDisk(state["latest_fetched_news_per_ticker"], DISK_FILE_NAME_PREFIX)
     return state
 
-def analyzeNewsItems(state: LLMState):
+def analyzeNewsItems(state: LLMState, tokenizer, model):
     print("Analyzing news items")
-    tokenizer = AutoTokenizer.from_pretrained("ProsusAI/finbert")
-    model = AutoModelForSequenceClassification.from_pretrained("ProsusAI/finbert")
-    model.to(DEVICE)
     for ticker in state["latest_fetched_news_per_ticker"]:
         for news_item in state["latest_fetched_news_per_ticker"][ticker]:
             if news_item["item_status"] == ItemStatus.DO_SENTIMENT_ANALYSIS:
@@ -166,27 +172,36 @@ def analyzeNewsItems(state: LLMState):
                 news_item["sentiment"] = (sentimentFinbert, probabilityFinbert)
                 news_item["item_status"] = ItemStatus.SENTIMENT_DONE
     return state
-            
 
-@tool
-async def postNotification_test(message: str, telegram_api_token, notification_group: str):
-    """Post message to notification group on telegram.
 
-    Args:
-        message(str): message to post
-        telegram_api_token (str): bot api token
-        notification_group (str): the group id to post notificatiokn to
-    
-    """
-    telegram_bot = Bot(token=telegram_api_token)
-    print("Executing the notification posting tool")
-    await postTelegramNotification(message, telegram_bot, notification_group)
+def makePostNotificationTool(telegram_api_token, notification_group):
+    # The token and group id are closed over so they never appear in the LLM prompt
+    @tool
+    async def postNotification(message: str):
+        """Post message to notification group on telegram.
 
-                  
+        Args:
+            message(str): message to post
+
+        """
+        telegram_bot = Bot(token=telegram_api_token)
+        print("Executing the notification posting tool")
+        if await postTelegramNotification(message, telegram_bot, notification_group):
+            return "SUCCESS"
+        return "FAILED"
+    return postNotification
+
+
+def didAgentPostSuccessfully(result):
+    for message in result.get("messages", []):
+        if isinstance(message, ToolMessage) and "SUCCESS" in str(message.content):
+            return True
+    return False
+
 def isSentimentOverThreshold(sentiment, probability):
     return (sentiment == "positive" or sentiment == "negative") and probability > SENTIMENT_THRESHOLD
-      
-async def postNewsItems(state: LLMState, agent_executor, telegram_api_token, notification_group):
+
+async def postNewsItems(state: LLMState, agent_executor):
     print("Posting news items")
     for ticker in state["latest_fetched_news_per_ticker"]:
         for news_item in state["latest_fetched_news_per_ticker"][ticker]:
@@ -194,10 +209,15 @@ async def postNewsItems(state: LLMState, agent_executor, telegram_api_token, not
                 if isSentimentOverThreshold(news_item["sentiment"][0], news_item["sentiment"][1]):
                     print(f"Found news item with sentiment: {news_item["sentiment"][0]} and probability: {news_item["sentiment"][1]}")
                     result = await agent_executor.ainvoke(
-                        {"messages": [HumanMessage(content=f"Post the notification with items: message='New news item for {ticker} with {news_item["sentiment"][0]} sentiment found in: {news_item["news_url"]}', telegram_api_token={telegram_api_token}, notification_group={notification_group}. ")]}
+                        {"messages": [HumanMessage(content=f"Post the notification with message='New news item for {ticker} with {news_item["sentiment"][0]} sentiment found in: {news_item["news_url"]}'")]}
                     )
                     print(f"Agent return: {result}")
-                    news_item["item_status"] = ItemStatus.POSTED
+                    if didAgentPostSuccessfully(result):
+                        news_item["item_status"] = ItemStatus.POSTED
+                    else:
+                        # Retried on the next run, POST_FAILED is reset to SENTIMENT_DONE on load
+                        print("Agent did not report a successful post, marking item for retry")
+                        news_item["item_status"] = ItemStatus.POST_FAILED
                 else:
                     news_item["item_status"] = ItemStatus.IGNORE
     saveObjectToDisk(state["latest_fetched_news_per_ticker"], DISK_FILE_NAME_PREFIX)
@@ -215,20 +235,21 @@ def getNextStage(state: LLMState):
         return {"next_stage": "analyzeNewsItems"}
     elif lowest_state_found == ItemStatus.SENTIMENT_DONE:
         return {"next_stage": "postNewsItems"}
-    elif lowest_state_found == ItemStatus.POSTED:
+    elif lowest_state_found in (ItemStatus.POSTED, ItemStatus.IGNORE):
         print("No new news items found to post")
         return {"next_stage": END}
-    elif lowest_state_found == ItemStatus.IGNORE:
-        print("No new news items found to post")
+    elif state.get("fetch_done", False):
+        # Fetch produced nothing actionable, do not loop back to fetching again
+        print("No news items to process")
         return {"next_stage": END}
     else:
         return {"next_stage": "getLatestNewsItems"}
 
-        
+
 async def main(args):
     print("Running stock news monitor")
     login(token=args.huggingface_api_key)
-    
+
     model_name = "HuggingFaceTB/SmolLM2-1.7B-Instruct"
     llm = pipeline("text-generation",
         model=model_name, model_kwargs={"torch_dtype": "bfloat16"},
@@ -237,7 +258,11 @@ async def main(args):
         return_full_text=False
     )
 
-    tools = [postNotification_test]
+    finbert_tokenizer = AutoTokenizer.from_pretrained("ProsusAI/finbert")
+    finbert_model = AutoModelForSequenceClassification.from_pretrained("ProsusAI/finbert")
+    finbert_model.to(DEVICE)
+
+    tools = [makePostNotificationTool(args.telegram_api_token, args.telegram_notification_group_id)]
     agentic_llm = ChatOllama(
         model="llama3.2",
         temperature=0
@@ -247,29 +272,24 @@ async def main(args):
     workflow.add_node("getNextStage", getNextStage)
     workflow.add_node("getLatestNewsItems", partial(getLatestNewsItems, tickers=args.tickers))
     workflow.add_node("checkNewsItemsRelevance", partial(checkNewsItemsRelevance, relevance_check_llm=llm))
-    workflow.add_node("analyzeNewsItems", partial(analyzeNewsItems))
-    workflow.add_node("postNewsItems", partial(
-        postNewsItems, 
-        agent_executor=agent_executor,
-        telegram_api_token=args.telegram_api_token,
-        notification_group=args.telegram_notification_group_id)
-    )
-    
+    workflow.add_node("analyzeNewsItems", partial(analyzeNewsItems, tokenizer=finbert_tokenizer, model=finbert_model))
+    workflow.add_node("postNewsItems", partial(postNewsItems, agent_executor=agent_executor))
+
     workflow.add_edge(START, "getNextStage")
     workflow.add_edge("getLatestNewsItems", "getNextStage")
     workflow.add_edge("checkNewsItemsRelevance", "getNextStage")
     workflow.add_edge("analyzeNewsItems", "getNextStage")
     workflow.add_edge("postNewsItems", "getNextStage")
-    workflow.add_conditional_edges("getNextStage", lambda state: state["next_stage"], 
+    workflow.add_conditional_edges("getNextStage", lambda state: state["next_stage"],
     ["getLatestNewsItems", "checkNewsItemsRelevance", "analyzeNewsItems", "postNewsItems", END])
     graph = workflow.compile()
 
     while True:
-        result = await graph.ainvoke({ "latest_fetched_news_per_ticker": {}})
+        result = await graph.ainvoke({ "latest_fetched_news_per_ticker": {}, "fetch_done": False})
         print(result)
         if args.single_run:
             break
-        time.sleep(600)
+        await asyncio.sleep(600)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser("stock_news_monitor")
